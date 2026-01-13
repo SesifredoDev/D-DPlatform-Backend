@@ -9,6 +9,8 @@ router.post('/',
     upload.fields([{ name: 'icon', maxCount: 1 }, { name: 'pdf', maxCount: 1 }]),
     characterController.createCharacter
 );
+router.put('/:id',auth, upload.fields([{ name: 'icon', maxCount: 1 }, { name: 'pdf', maxCount: 1 }]),
+    characterController.updateCharacter )
 
 router.get('/', auth, characterController.getMyCharacters);
 

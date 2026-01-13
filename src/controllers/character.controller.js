@@ -13,15 +13,18 @@ exports.createCharacter = async (req, res) => {
         if (req.files) {
             if (req.files.icon) {
                 iconUrl = await uploadToGridFS(req.files.icon[0], req);
+            }else{
+                iconUrl = charData.icon;
             }
             if (req.files.pdf) {
                 pdfUrl = await uploadToGridFS(req.files.pdf[0], req);
             }
         }
 
-        const filter = charData.ddbId
-            ? {ddbId: charData.ddbId, ownerId: userId}
-            : {_id: charData._id || new mongoose.Types.ObjectId(), ownerId: userId};
+        const filter = {
+            _id: charData._id || new mongoose.Types.ObjectId(),
+            ownerId: userId
+        };
 
         const update = {
             ownerId: userId,
@@ -57,9 +60,66 @@ exports.createCharacter = async (req, res) => {
     }
 };
 
+
+exports.updateCharacter = async (req, res) => {
+    try {
+        const { id } = req.params; // The MongoDB UUID from /characters/:id
+        const userId = req.user.id;
+        const charData = req.body;
+        let updateFields = {};
+        const character = await Character.findOne({ _id: id, ownerId: userId });
+        if (!character) {
+            return res.status(404).json({ message: "Character not found or unauthorized." });
+        }
+
+        const fields = ['name', 'race', 'ddbId', 'ac'];
+        fields.forEach(field => {
+            if (charData[field] !== undefined) updateFields[field] = charData[field];
+        });
+
+        if (charData.baseStats) {
+            updateFields.baseStats = typeof charData.baseStats === 'string'
+                ? JSON.parse(charData.baseStats) : charData.baseStats;
+        }
+        if (charData.classes) {
+            updateFields.classes = typeof charData.classes === 'string'
+                ? JSON.parse(charData.classes) : charData.classes;
+        }
+        if (charData.servers) {
+            updateFields.servers = typeof charData.servers === 'string'
+                ? JSON.parse(charData.servers) : charData.servers;
+        }
+
+        if (req.files) {
+            if (req.files.icon) {
+                updateFields.icon = await uploadToGridFS(req.files.icon[0], req);
+            }
+            if (req.files.pdf) {
+                updateFields.pdfLink = await uploadToGridFS(req.files.pdf[0], req);
+            }
+        }
+
+        if (charData.serverId) {
+            updateFields.$addToSet = { servers: charData.serverId };
+        }
+
+        updateFields.lastUpdated = Date.now();
+        const updatedCharacter = await Character.findByIdAndUpdate(
+            id,
+            updateFields,
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json(updatedCharacter);
+    } catch (error) {
+        console.error("Error updating character:", error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 exports.getMyCharacters = async (req, res) => {
     try {
-        // Find all characters where the owner matches the logged-in user
+
         const characters = await Character.find({ ownerId: req.user.id })
             .sort({ lastUpdated: -1 });
         res.status(200).json(characters);
