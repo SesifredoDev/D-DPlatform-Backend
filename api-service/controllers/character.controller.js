@@ -1,4 +1,4 @@
-const Character = require('../models/Character');
+  const Character = require('../models/Character');
 const mongoose = require("mongoose");
 const {uploadToGridFS} = require("../utils/fileManagement");
 
@@ -17,7 +17,7 @@ exports.createCharacter = async (req, res) => {
                 iconUrl = charData.icon;
             }
             if (req.files.pdf) {
-                pdfUrl = await uploadToGridFS(req.files.pdf[0], req);
+                pdfUrl = await uploadToGridFS(req.files.pdf[0],  req);
             }
         }
 
@@ -66,13 +66,14 @@ exports.updateCharacter = async (req, res) => {
         const { id } = req.params; // The MongoDB UUID from /characters/:id
         const userId = req.user.id;
         const charData = req.body;
+        console.log(charData);
         let updateFields = {};
         const character = await Character.findOne({ _id: id, ownerId: userId });
         if (!character) {
             return res.status(404).json({ message: "Character not found or unauthorized." });
         }
 
-        const fields = ['name', 'race', 'ddbId', 'ac'];
+        const fields = ['name', 'race', 'ddbId', "ddbUsername", 'ac'];
         fields.forEach(field => {
             if (charData[field] !== undefined) updateFields[field] = charData[field];
         });
@@ -89,6 +90,7 @@ exports.updateCharacter = async (req, res) => {
             updateFields.servers = typeof charData.servers === 'string'
                 ? JSON.parse(charData.servers) : charData.servers;
         }
+
 
         if (req.files) {
             if (req.files.icon) {

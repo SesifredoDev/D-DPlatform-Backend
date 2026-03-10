@@ -24,7 +24,7 @@ exports.uploadProfileIcon = async (req, res) => {
     uploadStream.end(req.file.buffer);
 
     uploadStream.on("finish", async () => {
-        const fileUrl = `${req.protocol}://${req.get("host")}/files/${fileId}`;
+        const fileUrl = `${req.protocol}://${req.get("host")}/api/files/${fileId}`;
 
         const user = await User.findByIdAndUpdate(
             req.user.id,

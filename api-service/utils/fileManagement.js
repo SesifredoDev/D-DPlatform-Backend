@@ -16,7 +16,7 @@ exports.uploadToGridFS = (file, req) => {
         uploadStream.end(file.buffer);
 
         uploadStream.on("finish", () => {
-            const fileUrl = `${req.protocol}://${req.get("host")}/files/${fileId}`;
+            const fileUrl = `${req.protocol}://${req.get("host")}/api/files/${fileId}`;
             resolve(fileUrl);
         });
 

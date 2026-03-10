@@ -10,14 +10,13 @@ const characterRoutes = require('./routes/character.routes');
 const serverRoutes = require('./routes/server.routes');
 const messageRoutes = require('./routes/message.routes');
 
-
 const app = express();
 
 app.use(
     cors({
-        origin: 'http://localhost:4200',
+        origin:"http://localhost:4200",
         credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        methods: ['GET', 'POST','PATCH', 'PUT', 'DELETE', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization'],
     })
 );
@@ -25,13 +24,13 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
+// Standard API Routes
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
-app.use('/files', fileRoutes );
+app.use('/files', fileRoutes);
 app.use('/ddb', ddbRoutes);
-
 app.use('/server', serverRoutes);
-app.use('/message', messageRoutes )
+app.use('/message', messageRoutes);
 app.use('/character', characterRoutes);
 
 module.exports = app;

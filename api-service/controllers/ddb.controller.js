@@ -59,13 +59,14 @@ function parseSurfaceInfo(data) {
     };
 
     const dexMod = Math.floor((stats.dexterity - 10) / 2);
-
+    console.log(data.username)
     return {
         id: data.id,
         name: data.name,
         race: data.race.fullName, // e.g. "Eladrin (Variant)"
         icon: data.decorations?.avatarUrl || data.avatarUrl,
         baseStats: stats,
+        username: data.username,
         // Classes and Subclasses mapping
         classes: data.classes.map(c => ({
             className: c.definition.name,

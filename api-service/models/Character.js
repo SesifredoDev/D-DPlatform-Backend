@@ -15,6 +15,10 @@ const CharacterSchema = new mongoose.Schema({
         type: Number, // Optional D&D Beyond ID (e.g., 94599937)
         default: null
     },
+    ddbUsername:{
+        type: String,
+        default: null
+    },
     pdfLink: {
         type: String, // Optional PDF Link
         default: null

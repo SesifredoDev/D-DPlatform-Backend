@@ -34,7 +34,7 @@ exports.createServer = async (req, res) => {
     // 2. Create the default '@everyone' role for this server
     const defaultRole = await Role.create({
         server: server._id,
-        name: "@everyone",
+        name: "Everyone",
         permissions: {
             SEND_MESSAGES: true,
             CONNECT: true,
@@ -213,7 +213,10 @@ exports.updateServer = async (req, res) => {
     }
 
     if (req.files && req.files.icon) {
+        console.log(req.files.icon);
+
         server.icon = await uploadToGridFS(req.files.icon[0], req);
+
     }
     if (name) server.name = name;
 
@@ -375,6 +378,30 @@ exports.getServerDetails = async (req, res) => {
             return res.status(403).json({ message: "Access denied. Not a member." });
         }
 
+
+        const characters = await Character.find({
+            servers: serverId
+        }).lean();
+
+        const charactersByOwner = {};
+
+        for (const char of characters) {
+            const ownerId = char.ownerId.toString();
+
+            if (!charactersByOwner[ownerId]) {
+                charactersByOwner[ownerId] = [];
+            }
+
+            charactersByOwner[ownerId].push(char);
+        }
+
+        // Attach characters to members
+        server.members = server.members.map(member => ({
+            ...member,
+            characters: charactersByOwner[member.user._id.toString()] || []
+        }));
+
+
         const allChannels = await Channel.find({ server: serverId }).sort({ position: 1 });
 
         const visibleChannels = [];
@@ -395,3 +422,5 @@ exports.getServerDetails = async (req, res) => {
         res.status(500).json({ message: "Error fetching server details", error: error.message });
     }
 };
+
+

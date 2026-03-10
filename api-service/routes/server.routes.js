@@ -23,6 +23,7 @@ const {
     listChannels,
     m
 } = require("../controllers/channel.controller.js");
+const {getVideoRoomMetadata} = require("../controllers/channel.controller");
 
 
 router.post("/", auth, upload.fields([{ name: 'icon', maxCount: 1 }]), createServer);
@@ -43,5 +44,6 @@ router.get("/:serverId/channels", auth, listChannels);
 router.post("/:serverId/channels", auth, createChannel);
 router.patch("/:serverId/channels/:channelId", auth, updateChannel);
 router.delete("/:serverId/channels/:channelId", auth, deleteChannel);
+router.get("/internal/video-metadata/:channelId", auth, getVideoRoomMetadata);
 
 module.exports = router;

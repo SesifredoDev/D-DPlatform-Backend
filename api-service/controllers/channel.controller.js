@@ -88,7 +88,7 @@ exports.listChannels = async (req, res) => {
 exports.updateChannel = async (req, res) => {
     const userId = req.user.id;
     const { serverId, channelId } = req.params;
-    const { name, icon, position, permissionOverwrites } = req.body;
+    const { name, icon, position, type, permissionOverwrites } = req.body;
 
     const server = await Server.findById(serverId);
     const member = server.members.find(m => m.user.toString() === userId);
@@ -102,6 +102,7 @@ exports.updateChannel = async (req, res) => {
         {
             name,
             icon,
+            type,
             position,
             permissionOverwrites // Update role-specific overrides
         },
@@ -130,4 +131,24 @@ exports.deleteChannel = async (req, res) => {
     if (result.deletedCount === 0) return res.status(404).json({ message: "Channel not found" });
 
     res.json({ message: "Channel deleted" });
+};
+
+
+// New internal helper to check ownership for the Video Service
+exports.getVideoRoomMetadata = async (req, res) => {
+    const { channelId } = req.params;
+    try {
+        const channel = await Channel.findById(channelId).populate('server');
+        if (!channel || !channel.server) {
+            return res.status(404).json({ message: "Channel or Server not found" });
+        }
+
+        res.json({
+            ownerId: channel.server.owner,
+            serverId: channel.server._id,
+            channelName: channel.name
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 };

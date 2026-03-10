@@ -1,0 +1,57 @@
+services:
+  api-service:
+    build: ./api-service
+    env_file: .env
+    init: true
+    ports:
+      - "5000:3000"
+    depends_on:
+      - redis
+    networks:
+      - d-platform-network
+
+  messaging-service:
+    build: ./messaging-service
+    env_file: .env
+    init: true
+    ports:
+      - "3001:3001"
+    depends_on:
+      - redis
+    networks:
+      - d-platform-network
+
+  video-service:
+    build: ./video-service
+    init: true
+    env_file: .env
+    ports:
+      - "3002:3002"
+      - "40000-40050:40000-40050/udp"
+      - "40000-40050:40000-40050/tcp"
+    networks:
+      - d-platform-network
+
+  # NEW: Nginx Proxy
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+    networks:
+      - d-platform-network
+
+
+  redis:
+    image: redis:alpine
+    networks:
+      - d-platform-network
+
+
+
+
+
+networks:
+  d-platform-network:
+    driver: bridge

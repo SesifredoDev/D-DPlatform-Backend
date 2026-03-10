@@ -1,0 +1,25 @@
+{
+  "name": "messaging-service",
+  "version": "1.0.0",
+  "description": "Real-time socket service with Redis Pub/Sub integration",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [
+    "socket.io",
+    "redis",
+    "nodejs",
+    "realtime"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "redis": "^4.6.10",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
