@@ -21,18 +21,26 @@ services:
     networks:
       - d-platform-network
 
-  video-service:
-    build: ./video-service
-    init: true
-    env_file: .env
+  map-service:
+    build: ./map-service
     ports:
-      - "3002:3002"
-      - "40000-40050:40000-40050/udp"
-      - "40000-40050:40000-40050/tcp"
+      - "3003:3003"
     networks:
       - d-platform-network
 
-  # NEW: Nginx Proxy
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+    ports:
+      - "7880:7880" # HTTP API / Signal
+      - "7881:7881" # WebRTC Signal
+      - "50000-50050:50000-50050/udp" # WebRTC Media
+    env_file: .env
+    networks:
+      - d-platform-network
+
   nginx:
     image: nginx:alpine
     volumes:
@@ -42,15 +50,10 @@ services:
     networks:
       - d-platform-network
 
-
   redis:
     image: redis:alpine
     networks:
       - d-platform-network
-
-
-
-
 
 networks:
   d-platform-network:

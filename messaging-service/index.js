@@ -4,72 +4,62 @@ const http = require('http');
 
 const server = http.createServer();
 const io = new Server(server, {
+    path: '/socket.io/',
     cors: {
-        origin: true, // Let Nginx handle the specific origin security
+        origin: true,
         credentials: true
     },
-    transports: ['websocket', 'polling'] // Allow both for better compatibility
+    transports: ['websocket', 'polling']
 });
 
-// Use internal Docker network service name 'redis'
 const subscriber = redis.createClient({ url: process.env.REDIS_URL || 'redis://redis:6379' });
-
-
 subscriber.on('error', (err) => console.error('Redis Error:', err));
 
 async function start() {
-    await subscriber.connect();
-    console.log('Connected to Redis Sub/Pub');
+    try {
+        await subscriber.connect();
+        console.log('Connected to Redis Sub/Pub');
 
-    // Subscribe to the channel the API service publishes to [cite: 1]
-    await subscriber.subscribe('CHAT_MESSAGES', (message) => {
-        try {
-            const payload = JSON.parse(message);
-            // Broadcast only to users joined in the specific channel room [cite: 1]
-            io.to(payload.channelId).emit('new_message', payload);
-        } catch (err) {
-            console.error("Payload error:", err);
-        }
-    });
-
-    io.on('connection', (socket) => {
-        console.log("User connected:", socket.id);
-
-        socket.on('join_channel', (channelId) => {
-            console.log(`Socket ${socket.id} joining room ${channelId}`);
-            socket.join(channelId);
+        await subscriber.subscribe('CHAT_MESSAGES', (message) => {
+            try {
+                const payload = JSON.parse(message);
+                io.to(payload.channelId).emit('new_message', payload);
+            } catch (err) {
+                console.error("Payload error:", err);
+            }
         });
-
-        socket.on('disconnect', () => console.log("User disconnected"));
-    });
-
-    server.listen(3001, '0.0.0.0', () => {
-        console.log('Messaging Service listening on port 3001');
-    });
+    } catch (err) {
+        console.error("Redis connection failed, retrying in background...", err);
+    }
 }
+
+io.on('connection', (socket) => {
+    console.log("User connected to Messaging:", socket.id);
+
+    socket.on('join_channel', (channelId) => {
+        console.log(`Socket ${socket.id} joining room ${channelId}`);
+        socket.join(channelId);
+    });
+
+    socket.on('disconnect', () => console.log("User disconnected from Messaging"));
+});
+
+// Start listening immediately so Nginx doesn't return 502
+server.listen(3001, '0.0.0.0', () => {
+    console.log('Messaging Service listening on port 3001');
+});
 
 start();
 
 const shutdown = async (signal) => {
     console.log(`Received ${signal}. Shutting down...`);
-
     try {
-        // 1. Stop accepting new socket connections
         io.close();
-
-        // 2. Disconnect from Redis (Crucial!)
-        if (subscriber.isOpen) {
-            await subscriber.quit();
-            console.log("Redis client disconnected");
-        }
-
-        // 3. Close the HTTP server
+        if (subscriber.isOpen) await subscriber.quit();
         server.close(() => {
             console.log("HTTP server closed.");
             process.exit(0);
         });
-
-        // Force exit if server.close hangs (e.g., due to keep-alive connections)
         setTimeout(() => process.exit(1), 5000);
     } catch (err) {
         console.error("Error during shutdown:", err);
