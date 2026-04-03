@@ -1,4 +1,9 @@
 services:
+  redis:
+    image: redis:alpine
+    networks:
+      - d-platform-network
+
   api-service:
     build: ./api-service
     env_file: .env
@@ -50,10 +55,7 @@ services:
     networks:
       - d-platform-network
 
-  redis:
-    image: redis:alpine
-    networks:
-      - d-platform-network
+
 
 networks:
   d-platform-network:
