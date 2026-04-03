@@ -11,7 +11,6 @@ turn:
   enabled: true
   domain: 167.172.57.130
   udp_port: 3478
-  tcp_port: 3478
 
 keys:
   devkey: "secret"
