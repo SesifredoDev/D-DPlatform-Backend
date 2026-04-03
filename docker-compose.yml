@@ -35,15 +35,7 @@ services:
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml
     restart: always
-    ports:
-      - "7880:7880" # HTTP API / Signal
-      - "7881:7881" # WebRTC Signal
-      - "3478:3478/udp" # TURN UDP
-      - "3478:3478/tcp" # TURN TCP
-      - "50000-50100:50000-50100/udp" # WebRTC Media
     env_file: .env
-    networks:
-      - d-platform-network
 
   nginx:
     image: nginx:alpine
