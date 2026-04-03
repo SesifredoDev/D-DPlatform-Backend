@@ -4,8 +4,22 @@ const Server = require("../models/Server");
 const Role = require("../models/Roles");
 const Character = require("../models/Character");
 const redis = require('redis');
-const publisher = redis.createClient({ url: process.env.REDIS_URL });
-publisher.connect();
+
+const publisher = redis.createClient({ 
+    url: process.env.REDIS_URL || 'redis://redis:6379',
+    socket: {
+        reconnectStrategy: (retries) => {
+            if (retries > 20) {
+                console.error('Redis Publisher: Max retries reached, giving up.');
+                return new Error('Redis connection failed');
+            }
+            return Math.min(retries * 100, 3000);
+        }
+    }
+});
+
+publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
+publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
 
 /* ===== PERMISSIONS ===== */
 
@@ -81,7 +95,11 @@ exports.sendMessage = async (req, res) => {
 
         // 2. Publish to Redis instead of using local socket
         // This triggers the independent Messaging Service to broadcast the event
-        await publisher.publish('CHAT_MESSAGES', JSON.stringify(payload));
+        if (publisher.isOpen) {
+            await publisher.publish('CHAT_MESSAGES', JSON.stringify(payload));
+        } else {
+            console.error('Redis Publisher not connected, message broadcast failed');
+        }
 
         res.status(201).json(payload);
     } catch (err) {

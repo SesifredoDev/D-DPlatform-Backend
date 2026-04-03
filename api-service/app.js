@@ -29,6 +29,11 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
 // Standard API Routes
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);

@@ -18,6 +18,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - d-platform-network
 
@@ -30,6 +35,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 3001"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - d-platform-network
 
@@ -41,6 +51,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 3003"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - d-platform-network
 
@@ -54,6 +69,11 @@ services:
       - "7881:7881" # WebRTC Signal
       - "50000-50050:50000-50050/udp" # WebRTC Media
     env_file: .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7880/health"] # Assuming LiveKit has a health endpoint
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - d-platform-network
 
@@ -64,10 +84,14 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - api-service
-      - messaging-service
-      - map-service
-      - livekit
+      api-service:
+        condition: service_healthy
+      messaging-service:
+        condition: service_healthy
+      map-service:
+        condition: service_healthy
+      livekit:
+        condition: service_healthy
     networks:
       - d-platform-network
 

@@ -8,13 +8,29 @@ const io = require('socket.io')(3003, {
 
 const { createClient } = require('redis');
 // Uses the REDIS_URL from your .env or the container name
-const redisClient = createClient({ url: process.env.REDIS_URL || 'redis://redis:6379' });
+const redisClient = createClient({ 
+    url: process.env.REDIS_URL || 'redis://redis:6379',
+    socket: {
+        reconnectStrategy: (retries) => {
+            if (retries > 20) {
+                console.error('Redis Client: Max retries reached, giving up.');
+                return new Error('Redis connection failed');
+            }
+            return Math.min(retries * 100, 3000);
+        }
+    }
+});
 
 redisClient.on('error', err => console.error('Redis Error:', err));
 
 async function startServer() {
-    await redisClient.connect();
-    console.log('Connected to Redis for Room Persistence');
+    try {
+        await redisClient.connect();
+        console.log('Connected to Redis for Room Persistence');
+    } catch (err) {
+        console.error("Redis initial connection failed, retrying in background...", err);
+        // reconnectStrategy handles retries, but we might want to delay app logic if connection is critical
+    }
 
     const debug = (msg, data = '') => {
         console.log(`[${new Date().toLocaleTimeString()}] ${msg}`, data);
@@ -28,6 +44,12 @@ async function startServer() {
             debug(`!!! RECEIVED HOST REQUEST for Room: ${roomId}`); // Add this
             socket.join(roomId);
 
+            if (!redisClient.isOpen) {
+                console.error('Redis not connected, cannot host session.');
+                socket.emit('error', 'Server not ready: Redis connection lost.');
+                return;
+            }
+
             const state = initialState || { tokens: [], walls: [], gridSize: 50 };
             await redisClient.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
 
@@ -37,6 +59,12 @@ async function startServer() {
 
         socket.on('join-session', async ({ roomId, character }) => {
             debug(`JOIN ATTEMPT: ${socket.id} for Room ${roomId}`);
+
+            if (!redisClient.isOpen) {
+                console.error('Redis not connected, cannot join session.');
+                socket.emit('error', 'Server not ready: Redis connection lost.');
+                return;
+            }
 
             let stateRaw = await redisClient.get(`room:${roomId}`);
             if (stateRaw) {
@@ -56,6 +84,12 @@ async function startServer() {
 
         // index.js additions/modifications
         socket.on('sync-action', async ({ roomId, action, data }) => {
+            if (!redisClient.isOpen) {
+                console.error('Redis not connected, cannot sync action.');
+                socket.emit('error', 'Server not ready: Redis connection lost.');
+                return;
+            }
+
             const stateRaw = await redisClient.get(`room:${roomId}`);
             if (!stateRaw) return;
 

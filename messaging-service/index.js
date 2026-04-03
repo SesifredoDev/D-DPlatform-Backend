@@ -12,7 +12,19 @@ const io = new Server(server, {
     transports: ['websocket', 'polling']
 });
 
-const subscriber = redis.createClient({ url: process.env.REDIS_URL || 'redis://redis:6379' });
+const subscriber = redis.createClient({ 
+    url: process.env.REDIS_URL || 'redis://redis:6379',
+    socket: {
+        reconnectStrategy: (retries) => {
+            if (retries > 20) {
+                console.error('Redis Subscriber: Max retries reached, giving up.');
+                return new Error('Redis connection failed');
+            }
+            return Math.min(retries * 100, 3000);
+        }
+    }
+});
+
 subscriber.on('error', (err) => console.error('Redis Error:', err));
 
 async function start() {
@@ -30,6 +42,7 @@ async function start() {
         });
     } catch (err) {
         console.error("Redis connection failed, retrying in background...", err);
+        // reconnectStrategy handles retries
     }
 }
 
