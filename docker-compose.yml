@@ -1,6 +1,11 @@
 services:
   redis:
     image: redis:alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - d-platform-network
 
@@ -11,7 +16,8 @@ services:
     ports:
       - "5000:3000"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     networks:
       - d-platform-network
 
@@ -22,14 +28,19 @@ services:
     ports:
       - "3001:3001"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     networks:
       - d-platform-network
 
   map-service:
     build: ./map-service
+    env_file: .env
     ports:
       - "3003:3003"
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - d-platform-network
 
@@ -52,10 +63,13 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "80:80"
+    depends_on:
+      - api-service
+      - messaging-service
+      - map-service
+      - livekit
     networks:
       - d-platform-network
-
-
 
 networks:
   d-platform-network:
