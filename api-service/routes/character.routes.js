@@ -14,4 +14,6 @@ router.put('/:id',auth, upload.fields([{ name: 'icon', maxCount: 1 }, { name: 'p
 
 router.get('/', auth, characterController.getMyCharacters);
 
+router.delete('/:id', auth, characterController.deleteCharacter);
+
 module.exports = router;
