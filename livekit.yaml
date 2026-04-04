@@ -12,8 +12,8 @@ rtc:
 turn:
   enabled: true
   domain: 167.172.57.130
-  tls_port: 3478
   udp_port: 3478
+  tcp_port: 3479
 
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
