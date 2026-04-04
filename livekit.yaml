@@ -9,12 +9,6 @@ rtc:
   port_range_end: 50100
   use_external_ip: true
 
-turn:
-  enabled: true
-  domain: 167.172.57.130
-  udp_port: 3478
-  tcp_port: 3479
-
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
 
