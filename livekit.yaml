@@ -9,6 +9,7 @@ rtc:
   use_external_ip: true
   external_ip: 167.172.57.130
 
+
 turn:
   enabled: false # Disable TURN for now to simplify troubleshooting
   domain: 167.172.57.130
