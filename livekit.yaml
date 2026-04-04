@@ -1,4 +1,3 @@
-# livekit.yaml
 port: 7880
 bind_addresses:
   - "0.0.0.0"
@@ -6,13 +5,14 @@ rtc:
   tcp_port: 7881
   port_range_start: 50000
   port_range_end: 50100
+  # IMPORTANT: Use your Public/Droplet IP here so the browser knows where to send media
   use_external_ip: true
+  external_ip: 167.172.57.130
 
 turn:
-  enabled: false  # Change this to false if you are testing locally
+  enabled: false # Disable TURN for now to simplify troubleshooting
   domain: 167.172.57.130
   udp_port: 3478
-  # REMOVED: tls_port: 3478
 
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
