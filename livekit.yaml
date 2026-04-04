@@ -14,7 +14,7 @@ turn:
   tls_port: 3478
 
 keys:
-  devkey: "secret"
+  devkey: "superlongsecuresecretkeyatleast32chars!!"
 
 logging:
   level: info
