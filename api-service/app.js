@@ -69,7 +69,25 @@ app.get('/livekit/token', async (req, res) => {
         });
         
         const token = await at.toJwt();
-        res.send({ token: token });
+
+        // Securely provide ICE servers to the client
+        const iceServers = [
+            { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+            {
+                urls: [
+                    'turn:dissertation.metered.live:80',
+                    'turn:dissertation.metered.live:443',
+                    'turn:dissertation.metered.live:443?transport=tcp'
+                ],
+                username: "7b5929daae01c61791bd79e0",
+                credential: "IAn4+2Vz3ViblwX3"
+            }
+        ];
+
+        res.send({ 
+            token: token,
+            iceServers: iceServers
+        });
     } catch (error) {
         console.error('Error generating token:', error);
         res.status(500).send({ error: 'Failed to generate token' });
