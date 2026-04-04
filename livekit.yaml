@@ -5,14 +5,14 @@ rtc:
   tcp_port: 7881
   port_range_start: 50000
   port_range_end: 50100
-  # Change back to singular and remove the dash (-)
-  external_ip: 167.172.57.130
+  external_ips:
+    - 167.172.57.130
 
 turn:
   enabled: true
   domain: 167.172.57.130
   udp_port: 3478
-  tcp_port: 3478
+  tls_port: 3478
 
 keys:
   devkey: "secret"
