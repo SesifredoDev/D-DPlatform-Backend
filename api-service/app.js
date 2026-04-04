@@ -69,18 +69,17 @@ app.get('/livekit/token', async (req, res) => {
         
         const token = await at.toJwt();
 
-        // Refined iceServers for Metered.live
         const iceServers = [
-            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun.relay.metered.ca:80' },
             {
                 urls: [
-                    'turn:dissertation.metered.live:80',
-                    'turn:dissertation.metered.live:443',
-                    'turn:dissertation.metered.live:443?transport=tcp',
-                    'turns:dissertation.metered.live:443?transport=tcp'
+                    'turn:global.relay.metered.ca:80',
+                    'turn:global.relay.metered.ca:80?transport=tcp',
+                    'turn:global.relay.metered.ca:443',
+                    'turns:global.relay.metered.ca:443?transport=tcp'
                 ],
-                username: "7b5929daae01c61791bd79e0",
-                credential: "IAn4+2Vz3ViblwX3"
+                username: process.env.METERED_USERNAME,
+                credential: process.env.METERED_CREDENTIAL
             }
         ];
 
