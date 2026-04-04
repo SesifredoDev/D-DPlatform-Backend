@@ -5,13 +5,14 @@ rtc:
   tcp_port: 7881
   port_range_start: 50000
   port_range_end: 50100
-  # IMPORTANT: Use your Public/Droplet IP here so the browser knows where to send media
+  # CORRECT SYNTAX:
   use_external_ip: true
-  external_ip: 167.172.57.130
 
+# This is the top-level setting that replaces the incorrect rtc.external_ip
+node_ip: 167.172.57.130
 
 turn:
-  enabled: false # Disable TURN for now to simplify troubleshooting
+  enabled: false
   domain: 167.172.57.130
   udp_port: 3478
 
