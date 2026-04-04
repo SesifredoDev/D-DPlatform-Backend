@@ -34,6 +34,7 @@ services:
     network_mode: host
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml
+      - ./certs:/etc/livekit
     restart: always
     env_file: .env
 

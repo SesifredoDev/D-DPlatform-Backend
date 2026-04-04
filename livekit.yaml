@@ -1,3 +1,4 @@
+# livekit.yaml
 port: 7880
 bind_addresses:
   - "0.0.0.0"
@@ -8,10 +9,10 @@ rtc:
   use_external_ip: true
 
 turn:
-  enabled: true
+  enabled: false  # Change this to false if you are testing locally
   domain: 167.172.57.130
   udp_port: 3478
-  tls_port: 3478
+  # REMOVED: tls_port: 3478
 
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
