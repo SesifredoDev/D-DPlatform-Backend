@@ -59,7 +59,6 @@ app.get('/livekit/token', async (req, res) => {
             identity: identity,
         });
         
-        // Explicitly grant permission to update own metadata
         at.addGrant({ 
             roomJoin: true, 
             room: room, 
@@ -70,14 +69,15 @@ app.get('/livekit/token', async (req, res) => {
         
         const token = await at.toJwt();
 
-        // Securely provide ICE servers to the client
+        // Refined iceServers for Metered.live
         const iceServers = [
-            { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+            { urls: 'stun:stun.l.google.com:19302' },
             {
                 urls: [
                     'turn:dissertation.metered.live:80',
                     'turn:dissertation.metered.live:443',
-                    'turn:dissertation.metered.live:443?transport=tcp'
+                    'turn:dissertation.metered.live:443?transport=tcp',
+                    'turns:dissertation.metered.live:443?transport=tcp'
                 ],
                 username: "7b5929daae01c61791bd79e0",
                 credential: "IAn4+2Vz3ViblwX3"
