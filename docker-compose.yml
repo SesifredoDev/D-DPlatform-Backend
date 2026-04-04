@@ -48,6 +48,8 @@ services:
       - "80:80"
     networks:
       - d-platform-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   redis:
     image: redis:alpine
