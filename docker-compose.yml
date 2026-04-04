@@ -37,6 +37,8 @@ services:
       - ./certs:/etc/livekit
     restart: always
     env_file: .env
+    environment:
+      - LIVEKIT_RTC_EXTERNAL_IP=167.172.57.130
 
   nginx:
     image: nginx:alpine

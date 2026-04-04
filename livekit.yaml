@@ -7,15 +7,15 @@ rtc:
   tcp_port: 7881
   port_range_start: 50000
   port_range_end: 50100
-  use_external_ip: false # Disable auto-discovery and use explicit IP
-  external_ip: 167.172.57.130
+  use_external_ip: true
 
 turn:
   enabled: true
   domain: 167.172.57.130
   tls_port: 3478
   udp_port: 3478
-  external_ip: 167.172.57.130
+  external_ips:
+    - 167.172.57.130
 
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
