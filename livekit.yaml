@@ -9,9 +9,17 @@ rtc:
   port_range_start: 50000
   port_range_end: 50100
   use_external_ip: true
-  stun_servers:
-    - stun.l.google.com:19302
-    - stun1.l.google.com:19302
+  # These servers are sent to the client upon connection
+  ice_servers:
+    - urls:
+        - stun:stun.l.google.com:19302
+        - stun:stun1.l.google.com:19302
+    - urls:
+        - turn:dissertation.metered.live:80
+        - turn:dissertation.metered.live:443
+        - turn:dissertation.metered.live:443?transport=tcp
+      username: "7b5929daae01c61791bd79e0"
+      credential: "IAn4+2Vz3ViblwX3"
 
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
