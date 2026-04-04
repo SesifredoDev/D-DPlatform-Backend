@@ -53,7 +53,7 @@ app.get('/livekit/token', async (req, res) => {
         }
 
         const apiKey = process.env.LIVEKIT_API_KEY || 'devkey';
-        const apiSecret = process.env.LIVEKIT_API_SECRET || 'secret';
+        const apiSecret = process.env.LIVEKIT_API_SECRET || 'superlongsecuresecretkeyatleast32chars!!';
 
         const at = new AccessToken(apiKey, apiSecret, {
             identity: identity,
