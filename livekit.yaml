@@ -14,8 +14,6 @@ turn:
   domain: 167.172.57.130
   tls_port: 3478
   udp_port: 3478
-  external_ips:
-    - 167.172.57.130
 
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
