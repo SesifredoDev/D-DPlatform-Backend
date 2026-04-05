@@ -15,6 +15,7 @@ const {
     updateRole,
     deleteRole,
     updateMemberRoles,
+    getOrCreateWhisperChannel
 } = require( "../controllers/server.controller.js");
 const {
     createChannel,
@@ -45,5 +46,8 @@ router.post("/:serverId/channels", auth, createChannel);
 router.patch("/:serverId/channels/:channelId", auth, updateChannel);
 router.delete("/:serverId/channels/:channelId", auth, deleteChannel);
 router.get("/internal/video-metadata/:channelId", auth, getVideoRoomMetadata);
+
+// Whisper Channel
+router.post("/whisper/create", auth, getOrCreateWhisperChannel);
 
 module.exports = router;

@@ -406,9 +406,23 @@ exports.getServerDetails = async (req, res) => {
 
         const visibleChannels = [];
         for (const channel of allChannels) {
-            const canView = await checkChannelPermission(server, member, channel, "READ_MESSAGE_HISTORY");
-            if (canView) {
-                visibleChannels.push(channel);
+            if (channel.type === 'whisper') {
+                // Whisper channels are only visible to the owner and the recipient
+                if (server.owner.toString() === userId || channel.recipient.toString() === userId) {
+                    // For the recipient, we rename the channel to "DM Whisper"
+                    if (channel.recipient.toString() === userId && server.owner.toString() !== userId) {
+                         channel.name = "DM Whisper";
+                    } else if (server.owner.toString() === userId) {
+                         // For the owner, we might want to keep the name or use the recipient's name
+                         // Let's assume the name was set to recipient's username upon creation
+                    }
+                    visibleChannels.push(channel);
+                }
+            } else {
+                const canView = await checkChannelPermission(server, member, channel, "READ_MESSAGE_HISTORY");
+                if (canView) {
+                    visibleChannels.push(channel);
+                }
             }
         }
 
@@ -423,4 +437,45 @@ exports.getServerDetails = async (req, res) => {
     }
 };
 
+exports.getOrCreateWhisperChannel = async (req, res) => {
+    const userId = req.user.id;
+    const { serverId, recipientId } = req.body;
 
+    try {
+        const server = await Server.findById(serverId);
+        if (!server) return res.status(404).json({ message: "Server not found" });
+
+        // Ensure we are dealing with owner and someone else
+        const isOwner = server.owner.toString() === userId;
+        const targetId = isOwner ? recipientId : server.owner.toString();
+        
+        if (!targetId) return res.status(400).json({ message: "Recipient required" });
+
+        // Check if a whisper channel already exists between these two
+        // In this logic, 'recipient' field in Channel stores the non-owner user
+        const otherUser = isOwner ? recipientId : userId;
+        
+        let channel = await Channel.findOne({
+            server: serverId,
+            type: 'whisper',
+            recipient: otherUser
+        });
+
+        if (!channel) {
+            // Create it
+            const recipientUser = await require("../models/User").findById(otherUser);
+            channel = await Channel.create({
+                server: serverId,
+                name: recipientUser.username, // Default name for the owner's view
+                type: 'whisper',
+                icon: 'visibility_off',
+                recipient: otherUser,
+                permissionOverwrites: []
+            });
+        }
+
+        res.json(channel);
+    } catch (error) {
+        res.status(500).json({ message: "Error", error: error.message });
+    }
+};

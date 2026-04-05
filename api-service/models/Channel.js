@@ -12,8 +12,15 @@ const ChannelSchema = new mongoose.Schema({
     icon: { type: String, required: true },
     type: {
         type: String,
-        enum: ["text", "call", "map"], //call is a video call with cameras off by default
+        enum: ["text", "call", "map", "whisper"], // whisper is a private channel between a user and the DM
         required: true
+    },
+
+    // For whisper channels, this is the user who is NOT the owner
+    recipient: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null
     },
 
     permissionOverwrites: [
