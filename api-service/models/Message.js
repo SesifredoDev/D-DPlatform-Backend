@@ -13,7 +13,16 @@ const MessageSchema = new mongoose.Schema({
     },
 
     content: { type: String, required: true },
-    attachments: [String],
+    attachments: [{
+        url: String,
+        name: String,
+        contentType: String
+    }],
+    reactions: [{
+        emoji: String,
+        users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
+    }],
+    replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
     createdAt: { type: Date, default: Date.now }
 });
 

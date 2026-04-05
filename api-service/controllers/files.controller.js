@@ -31,3 +31,29 @@ exports.getFile = async (req, res) => {
         res.status(400).json({ message: "Invalid file ID" });
     }
 };
+
+exports.uploadFile = async (req, res) => {
+    const bucket = getBucket();
+    if (!bucket || !req.file) {
+        return res.status(400).json({ message: "No file provided" });
+    }
+
+    const uploadStream = bucket.openUploadStream(req.file.originalname, {
+        contentType: req.file.mimetype
+    });
+
+    uploadStream.end(req.file.buffer);
+
+    uploadStream.on('finish', () => {
+        res.status(201).json({
+            id: uploadStream.id,
+            filename: req.file.originalname,
+            contentType: req.file.mimetype,
+            url: `/api-service/files/${uploadStream.id}`
+        });
+    });
+
+    uploadStream.on('error', (err) => {
+        res.status(500).json({ message: "Upload failed" });
+    });
+};

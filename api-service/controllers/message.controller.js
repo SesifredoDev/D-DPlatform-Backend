@@ -52,12 +52,11 @@ exports.sendMessage = async (req, res) => {
     try {
         const userId = req.user.id;
         const { channelId } = req.params;
-        const { content, characterId } = req.body;
+        const { content, characterId, attachments, replyTo } = req.body;
 
         const channel = await Channel.findById(channelId);
         if (!channel) return res.status(404).json({ message: "Channel not found" });
 
-        // Permission check remains in the API service
         const canSend = await canPerformAction(
             channel.server,
             userId,
@@ -74,18 +73,28 @@ exports.sendMessage = async (req, res) => {
             if (!character) return res.status(403).json({ message: "Invalid character" });
         }
 
-        // 1. Persist to MongoDB
-        const message = await Message.create({
+        const messageData = {
             channel: channelId,
             server: channel.server,
             author: userId,
             character: characterId || null,
-            content
-        });
+            content,
+            attachments: attachments || [],
+            replyTo: replyTo || null
+        };
+
+        const message = await Message.create(messageData);
 
         await message.populate([
             { path: "author", select: "username avatar profileIcon" },
-            { path: "character", select: "name icon" }
+            { path: "character", select: "name icon" },
+            { 
+                path: "replyTo", 
+                populate: [
+                    { path: "author", select: "username" },
+                    { path: "character", select: "name" }
+                ]
+            }
         ]);
 
         const payload = {
@@ -93,12 +102,8 @@ exports.sendMessage = async (req, res) => {
             channelId
         };
 
-        // 2. Publish to Redis instead of using local socket
-        // This triggers the independent Messaging Service to broadcast the event
         if (publisher.isOpen) {
-            await publisher.publish('CHAT_MESSAGES', JSON.stringify(payload));
-        } else {
-            console.error('Redis Publisher not connected, message broadcast failed');
+            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ type: 'NEW_MESSAGE', data: payload }));
         }
 
         res.status(201).json(payload);
@@ -107,8 +112,73 @@ exports.sendMessage = async (req, res) => {
         res.status(500).json({ message: "Internal server error" });
     }
 };
-/* ===== GET HISTORY ===== */
 
+/* ===== REACTIONS ===== */
+exports.addReaction = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageId } = req.params;
+        const { emoji } = req.body;
+
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: "Message not found" });
+
+        let reaction = message.reactions.find(r => r.emoji === emoji);
+        if (reaction) {
+            if (!reaction.users.includes(userId)) {
+                reaction.users.push(userId);
+            }
+        } else {
+            message.reactions.push({ emoji, users: [userId] });
+        }
+
+        await message.save();
+
+        if (publisher.isOpen) {
+            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
+                type: 'REACTION_UPDATE', 
+                data: { messageId, reactions: message.reactions, channelId: message.channel } 
+            }));
+        }
+
+        res.json(message.reactions);
+    } catch (err) {
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+exports.removeReaction = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageId } = req.params;
+        const { emoji } = req.body;
+
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: "Message not found" });
+
+        let reaction = message.reactions.find(r => r.emoji === emoji);
+        if (reaction) {
+            reaction.users = reaction.users.filter(id => id.toString() !== userId);
+            if (reaction.users.length === 0) {
+                message.reactions = message.reactions.filter(r => r.emoji !== emoji);
+            }
+            await message.save();
+        }
+
+        if (publisher.isOpen) {
+            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
+                type: 'REACTION_UPDATE', 
+                data: { messageId, reactions: message.reactions, channelId: message.channel } 
+            }));
+        }
+
+        res.json(message.reactions);
+    } catch (err) {
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+/* ===== GET HISTORY ===== */
 exports.getMessages = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -130,7 +200,14 @@ exports.getMessages = async (req, res) => {
             .sort({ createdAt: -1 })
             .limit(50)
             .populate("author", "username profileIcon")
-            .populate("character", "name icon");
+            .populate("character", "name icon")
+            .populate({
+                path: "replyTo",
+                populate: [
+                    { path: "author", select: "username" },
+                    { path: "character", select: "name" }
+                ]
+            });
 
         res.json(messages);
     } catch (err) {

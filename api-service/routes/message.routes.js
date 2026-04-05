@@ -3,7 +3,9 @@ const router = express.Router();
 const auth = require('../middleware/auth.middleware');
 const {
     sendMessage,
-    getMessages
+    getMessages,
+    addReaction,
+    removeReaction
 } = require("../controllers/message.controller.js");
 
 /**
@@ -19,5 +21,17 @@ router.get("/:channelId", auth, getMessages);
  * @access  Private (Requires SEND_MESSAGES permission)
  */
 router.post("/:channelId", auth, sendMessage);
+
+/**
+ * @route   POST /api-service/messages/reaction/:messageId
+ * @desc    Add a reaction to a message
+ */
+router.post("/reaction/:messageId", auth, addReaction);
+
+/**
+ * @route   DELETE /api-service/messages/reaction/:messageId
+ * @desc    Remove a reaction from a message
+ */
+router.delete("/reaction/:messageId", auth, removeReaction);
 
 module.exports = router;

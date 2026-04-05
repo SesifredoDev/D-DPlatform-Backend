@@ -35,14 +35,17 @@ async function start() {
         await subscriber.subscribe('CHAT_MESSAGES', (message) => {
             try {
                 const payload = JSON.parse(message);
-                io.to(payload.channelId).emit('new_message', payload);
+                if (payload.type === 'NEW_MESSAGE') {
+                    io.to(payload.data.channelId).emit('new_message', payload.data);
+                } else if (payload.type === 'REACTION_UPDATE') {
+                    io.to(payload.data.channelId).emit('reaction_update', payload.data);
+                }
             } catch (err) {
                 console.error("Payload error:", err);
             }
         });
     } catch (err) {
         console.error("Redis connection failed, retrying in background...", err);
-        // reconnectStrategy handles retries
     }
 }
 
@@ -57,7 +60,6 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => console.log("User disconnected from Messaging"));
 });
 
-// Start listening immediately so Nginx doesn't return 502
 server.listen(3001, '0.0.0.0', () => {
     console.log('Messaging Service listening on port 3001');
 });
