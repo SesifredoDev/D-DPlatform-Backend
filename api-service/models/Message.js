@@ -23,6 +23,11 @@ const MessageSchema = new mongoose.Schema({
         users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
     }],
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+    
+    // Whisper functionality
+    isWhisper: { type: Boolean, default: false },
+    recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
     createdAt: { type: Date, default: Date.now }
 });
 

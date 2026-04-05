@@ -52,7 +52,7 @@ exports.sendMessage = async (req, res) => {
     try {
         const userId = req.user.id;
         const { channelId } = req.params;
-        const { content, characterId, attachments, replyTo } = req.body;
+        const { content, characterId, attachments, replyTo, isWhisper, recipientId } = req.body;
 
         const channel = await Channel.findById(channelId);
         if (!channel) return res.status(404).json({ message: "Channel not found" });
@@ -80,7 +80,9 @@ exports.sendMessage = async (req, res) => {
             character: characterId || null,
             content,
             attachments: attachments || [],
-            replyTo: replyTo || null
+            replyTo: replyTo || null,
+            isWhisper: isWhisper || false,
+            recipient: recipientId || null
         };
 
         const message = await Message.create(messageData);
@@ -94,7 +96,8 @@ exports.sendMessage = async (req, res) => {
                     { path: "author", select: "username" },
                     { path: "character", select: "name" }
                 ]
-            }
+            },
+            { path: "recipient", select: "username avatar profileIcon" }
         ]);
 
         const payload = {
@@ -187,6 +190,9 @@ exports.getMessages = async (req, res) => {
         const channel = await Channel.findById(channelId);
         if (!channel) return res.status(404).json({ message: "Channel not found" });
 
+        const server = await Server.findById(channel.server);
+        if (!server) return res.status(404).json({ message: "Server not found" });
+
         const canRead = await canPerformAction(
             channel.server,
             userId,
@@ -196,11 +202,34 @@ exports.getMessages = async (req, res) => {
         if (!canRead)
             return res.status(403).json({ message: "Access denied" });
 
-        const messages = await Message.find({ channel: channelId })
+        // Build query to filter whispers
+        const query = { 
+            channel: channelId,
+            $or: [
+                { isWhisper: { $ne: true } }, // Regular messages
+                { author: userId }, // Whispers I sent
+                { recipient: userId } // Whispers sent to me
+            ]
+        };
+
+        // If user is server owner, they can see all whispers? 
+        // User asked: "users can send the owner 'DM Whispers' within the server. The server owner (DM) can message using the same method, like a private text channel"
+        // This implies whispers are ALWAYS between a user and the owner.
+        
+        if (server.owner.toString() === userId) {
+            // Owner can see all messages in the channel? 
+            // Or specifically all whispers?
+            // If it's a "private text channel" feel, owner sees everything.
+            delete query.$or;
+            query.channel = channelId;
+        }
+
+        const messages = await Message.find(query)
             .sort({ createdAt: -1 })
             .limit(50)
             .populate("author", "username profileIcon")
             .populate("character", "name icon")
+            .populate("recipient", "username profileIcon")
             .populate({
                 path: "replyTo",
                 populate: [

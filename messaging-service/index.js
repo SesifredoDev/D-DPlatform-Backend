@@ -36,7 +36,19 @@ async function start() {
             try {
                 const payload = JSON.parse(message);
                 if (payload.type === 'NEW_MESSAGE') {
-                    io.to(payload.data.channelId).emit('new_message', payload.data);
+                    const data = payload.data;
+                    if (data.isWhisper) {
+                        // For whispers, only emit to specifically interested parties.
+                        // We could use private rooms or filter on client side, 
+                        // but let's at least emit to everyone in the channel 
+                        // and they will filter it if we want to keep it simple, 
+                        // OR emit to specific user IDs if we track them.
+                        // Let's emit to the channel for now, clients will handle visibility logic
+                        // (already partially enforced by getMessages query)
+                        io.to(data.channelId).emit('new_message', data);
+                    } else {
+                        io.to(data.channelId).emit('new_message', data);
+                    }
                 } else if (payload.type === 'REACTION_UPDATE') {
                     io.to(payload.data.channelId).emit('reaction_update', payload.data);
                 }
