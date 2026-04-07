@@ -1,6 +1,6 @@
+.env.development
+.env.development
+
 .env
-./.env
-
-
 node_modules
 ./node_modules
