@@ -20,6 +20,8 @@
   },
   "homepage": "https://github.com/SesifredoDev/D-DPlatform-Backend#readme",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1028.0",
+    "@aws-sdk/lib-storage": "^3.1028.0",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
@@ -28,14 +30,14 @@
     "express": "^5.2.1",
     "fs-extra": "^11.2.0",
     "jsonwebtoken": "^9.0.3",
+    "livekit-server-sdk": "^2.0.0",
     "mongoose": "^9.1.1",
     "multer": "^1.4.4",
     "multer-gridfs-storage": "^5.0.2",
     "redis": "^5.10.0",
+    "sharp": "^0.33.5",
     "socket.io": "^4.8.3",
-    "uuid": "^13.0.0",
-    "livekit-server-sdk": "^2.0.0",
-    "sharp": "^0.33.5"
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
