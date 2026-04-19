@@ -1,0 +1,2 @@
+# C:/Users/Paolo/dev/D-DPlatform-Backend/api-service/.env.development.development
+SPOTIFY_REDIRECT_URI = http://localhost/api/spotify/callback
