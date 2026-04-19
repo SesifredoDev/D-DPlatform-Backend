@@ -2,13 +2,102 @@ const crypto = require("crypto");
 const Server = require("../models/Server.js");
 const Channel = require("../models/Channel.js");
 const Character = require("../models/Character.js");
-const Role = require("../models/Roles.js"); // Added Role model
-const { uploadToGridFS } = require("../utils/fileManagement");
+const Role = require("../models/Roles.js"); 
+const s3Service = require("../services/s3.service");
+const sharp = require('sharp');
 const { hasPermission } = require("../utils/permissions");
-const {checkChannelPermission} = require("./channel.controller");
+const { checkChannelPermission } = require("./channel.controller");
+const redis = require('redis');
+
+const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
+
+const publisher = redis.createClient({ 
+    url: process.env.REDIS_URL || 'redis://redis:6379',
+    socket: {
+        reconnectStrategy: (retries) => {
+            if (retries > 20) {
+                console.error('Redis Publisher: Max retries reached, giving up.');
+                return new Error('Redis connection failed');
+            }
+            return Math.min(retries * 100, 3000);
+        }
+    }
+});
+
+publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
+publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
+
+async function notifyMemberUpdate(serverId) {
+    if (!publisher.isOpen) return;
+    
+    // Fetch fresh server details to send to clients
+    try {
+        const server = await Server.findById(serverId)
+            .populate({
+                path: 'members.user',
+                select: 'username email profileIcon'
+            })
+            .populate({
+                path: 'members.roles',
+                model: 'Role'
+            })
+            .lean();
+
+        if (server) {
+             const characters = await Character.find({ servers: serverId }).lean();
+             const charactersByOwner = {};
+             for (const char of characters) {
+                 const ownerId = char.ownerId.toString();
+                 if (!charactersByOwner[ownerId]) charactersByOwner[ownerId] = [];
+                 charactersByOwner[ownerId].push(char);
+             }
+
+             const members = server.members.map(member => ({
+                 ...member,
+                 characters: charactersByOwner[member.user._id.toString()] || []
+             }));
+
+             await publisher.publish('SERVER_UPDATES', JSON.stringify({
+                 type: 'MEMBER_UPDATE',
+                 serverId: serverId,
+                 data: members
+             }));
+        }
+    } catch (err) {
+        console.error("Error notifying member update:", err);
+    }
+}
 
 function generateJoinCode() {
     return crypto.randomBytes(4).toString("hex");
+}
+
+async function handleIconUpload(file) {
+    let fileBuffer = file.buffer;
+    let contentType = file.mimetype;
+    let filename = file.originalname;
+
+    if (contentType.startsWith('image/') && file.size <= SHARP_SIZE_LIMIT) {
+        try {
+            const sharpInstance = sharp(fileBuffer);
+            const metadata = await sharpInstance.metadata();
+            if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
+                fileBuffer = await sharpInstance.jpeg({ quality: 100, progressive: true, mozjpeg: true }).toBuffer();
+                contentType = 'image/jpeg';
+            } else if (metadata.format === 'png') {
+                fileBuffer = await sharpInstance.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+                contentType = 'image/png';
+            } else if (metadata.format === 'webp') {
+                fileBuffer = await sharpInstance.webp({ lossless: true }).toBuffer();
+                contentType = 'image/webp';
+            }
+        } catch (sharpError) {
+            console.warn(`[ServerController] Sharp processing failed for: ${filename}`, sharpError);
+        }
+    }
+
+    const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
+    return `/api/files/${uploadedAsset.key}`;
 }
 
 /**
@@ -16,14 +105,13 @@ function generateJoinCode() {
  */
 exports.createServer = async (req, res) => {
     const userId = req.user.id;
-    const { name } = req.body;
-    let iconUrl;
+    const { name, icon } = req.body;
+    let iconUrl = icon;
 
     if (req.files && req.files.icon) {
-        iconUrl = await uploadToGridFS(req.files.icon[0], req);
+        iconUrl = await handleIconUpload(req.files.icon[0]);
     }
 
-    // 1. Create the Server first
     const server = await Server.create({
         name,
         icon: iconUrl,
@@ -31,7 +119,6 @@ exports.createServer = async (req, res) => {
         joinCode: generateJoinCode(),
     });
 
-    // 2. Create the default '@everyone' role for this server
     const defaultRole = await Role.create({
         server: server._id,
         name: "Everyone",
@@ -43,7 +130,6 @@ exports.createServer = async (req, res) => {
         position: 0
     });
 
-    // 3. Update server with the role and add the owner as a member with that role
     server.roles.push(defaultRole._id);
     server.members.push({
         user: userId,
@@ -71,18 +157,45 @@ exports.joinServer = async (req, res) => {
         return res.status(400).json({ message: "Already a member" });
     }
 
-    // Find the @everyone role (usually the one at position 0)
-    const everyoneRole = await Role.findOne({ server: server._id, name: "@everyone" });
+    const everyoneRole = await Role.findOne({ server: server._id, name: "Everyone" });
 
     server.members.push({
         user: userId,
         roles: everyoneRole ? [everyoneRole._id] : []
     });
 
-    server.joinCode = generateJoinCode();
+    // server.joinCode = generateJoinCode(); // Removed to prevent code change on every join
     await server.save();
 
+    await notifyMemberUpdate(server._id);
+
     res.json({ message: "Joined server", serverId: server._id });
+};
+
+/**
+ * REFRESH JOIN CODE
+ */
+exports.refreshJoinCode = async (req, res) => {
+    const userId = req.user.id;
+    const { serverId } = req.params;
+
+    try {
+        const server = await Server.findById(serverId);
+        if (!server) return res.status(404).json({ message: "Server not found" });
+
+        const member = server.members.find(m => m.user.toString() === userId);
+
+        if (!member || !(await hasPermission(server, member, "MANAGE_SERVER"))) {
+            return res.status(403).json({ message: "Insufficient permissions" });
+        }
+
+        server.joinCode = generateJoinCode();
+        await server.save();
+
+        res.json({ joinCode: server.joinCode });
+    } catch (error) {
+        res.status(500).json({ message: "Error refreshing join code", error: error.message });
+    }
 };
 
 /**
@@ -127,12 +240,10 @@ exports.updateRole = async (req, res) => {
 
         const member = server.members.find(m => m.user.toString() === userId);
 
-        // Verify the user has the 'MANAGE_ROLES' permission
         if (!member || !(await hasPermission(server, member, "MANAGE_ROLES"))) {
             return res.status(403).json({ message: "Insufficient permissions" });
         }
 
-        // Update the role document
         const updatedRole = await Role.findOneAndUpdate(
             { _id: roleId, server: serverId },
             {
@@ -141,7 +252,7 @@ exports.updateRole = async (req, res) => {
                     ...(color && { color }),
                     ...(hoist !== undefined && { hoist }),
                     ...(position !== undefined && { position }),
-                    ...(permissions && { permissions }) // Updates the permissions object
+                    ...(permissions && { permissions })
                 }
             },
             { new: true }
@@ -150,6 +261,8 @@ exports.updateRole = async (req, res) => {
         if (!updatedRole) {
             return res.status(404).json({ message: "Role not found" });
         }
+
+        await notifyMemberUpdate(serverId);
 
         res.json(updatedRole);
     } catch (error) {
@@ -174,8 +287,8 @@ exports.deleteRole = async (req, res) => {
         const roleToDelete = await Role.findById(roleId);
         if (!roleToDelete) return res.status(404).json({ message: "Role not found" });
 
-        if (roleToDelete.name === "@everyone") {
-            return res.status(400).json({ message: "Cannot delete the @everyone role" });
+        if (roleToDelete.name === "Everyone") {
+            return res.status(400).json({ message: "Cannot delete the Everyone role" });
         }
 
         await Role.deleteOne({ _id: roleId, server: serverId });
@@ -187,6 +300,7 @@ exports.deleteRole = async (req, res) => {
         });
 
         await server.save();
+        await notifyMemberUpdate(serverId);
 
         res.json({ message: "Role deleted and removed from all members" });
     } catch (error) {
@@ -200,24 +314,23 @@ exports.deleteRole = async (req, res) => {
 exports.updateServer = async (req, res) => {
     const userId = req.user.id;
     const { serverId } = req.params;
-    const { name } = req.body;
+    const { name, icon } = req.body;
 
     const server = await Server.findById(serverId);
     if (!server) return res.status(404).json({ message: "Server not found" });
 
     const member = server.members.find(m => m.user.toString() === userId);
 
-    // Use permission check instead of strict owner-only for name updates
     if (!member || !(await hasPermission(server, member, "MANAGE_SERVER"))) {
         return res.status(403).json({ message: "Insufficient permissions" });
     }
 
     if (req.files && req.files.icon) {
-        console.log(req.files.icon);
-
-        server.icon = await uploadToGridFS(req.files.icon[0], req);
-
+        server.icon = await handleIconUpload(req.files.icon[0]);
+    } else if (icon !== undefined) {
+        server.icon = icon;
     }
+
     if (name) server.name = name;
 
     await server.save();
@@ -225,9 +338,9 @@ exports.updateServer = async (req, res) => {
 };
 
 exports.updateMemberRoles = async (req, res) => {
-    const userId = req.user.id; // The user making the request
-    const { serverId, memberId } = req.params; // memberId is the User ID of the target member
-    const { roles } = req.body; // Array of Role IDs to be assigned
+    const userId = req.user.id; 
+    const { serverId, memberId } = req.params; 
+    const { roles } = req.body; 
 
     try {
         const server = await Server.findById(serverId);
@@ -235,18 +348,15 @@ exports.updateMemberRoles = async (req, res) => {
 
         const requestMember = server.members.find(m => m.user.toString() === userId);
 
-        // 1. Permission Check: Must have MANAGE_ROLES or be Admin/Owner
         if (!requestMember || !(await hasPermission(server, requestMember, "MANAGE_ROLES"))) {
             return res.status(403).json({ message: "Insufficient permissions to manage roles" });
         }
 
-        // 2. Find the target member in the server
         const targetMember = server.members.find(m => m.user.toString() === memberId);
         if (!targetMember) {
             return res.status(404).json({ message: "Member not found in this server" });
         }
 
-        // 3. Validation: Ensure all provided Role IDs actually belong to this server
         const validRoles = await Role.find({
             _id: { $in: roles },
             server: serverId
@@ -256,10 +366,10 @@ exports.updateMemberRoles = async (req, res) => {
             return res.status(400).json({ message: "One or more provided roles are invalid for this server" });
         }
 
-        // 4. Update the member's roles
         targetMember.roles = roles;
 
         await server.save();
+        await notifyMemberUpdate(serverId);
 
         res.json({
             message: "Member roles updated successfully",
@@ -283,7 +393,6 @@ exports.deleteServer = async (req, res) => {
         return res.status(403).json({ message: "Only the owner can delete the server" });
     }
 
-    // Cleanup all associated data
     await Role.deleteMany({ server: serverId });
     await Channel.deleteMany({ server: serverId });
     await Character.deleteMany({ server: serverId });
@@ -300,10 +409,6 @@ exports.getUserServers= async (req, res) => {
     }).lean();
 
     const result = servers.map(server => {
-        const member = server.members.find(
-            m => m.user.toString() === userId
-        );
-
         return {
             _id: server._id,
             name: server.name,
@@ -313,9 +418,6 @@ exports.getUserServers= async (req, res) => {
 
     res.json(result);
 }
-
-
-
 
 /**
  * LEAVE SERVER
@@ -339,8 +441,10 @@ exports.leaveServer = async (req, res) =>{
         m => m.user.toString() !== userId
     );
 
-    await Character.deleteMany({ server: serverId, owner: userId });
+    await Character.deleteMany({ servers: serverId, ownerId: userId });
     await server.save();
+    
+    await notifyMemberUpdate(serverId);
 
     res.json({ message: "Left server" });
 }
@@ -407,14 +511,9 @@ exports.getServerDetails = async (req, res) => {
         const visibleChannels = [];
         for (const channel of allChannels) {
             if (channel.type === 'whisper') {
-                // Whisper channels are only visible to the owner and the recipient
                 if (server.owner.toString() === userId || channel.recipient.toString() === userId) {
-                    // For the recipient, we rename the channel to "DM Whisper"
                     if (channel.recipient.toString() === userId && server.owner.toString() !== userId) {
                          channel.name = "DM Whisper";
-                    } else if (server.owner.toString() === userId) {
-                         // For the owner, we might want to keep the name or use the recipient's name
-                         // Let's assume the name was set to recipient's username upon creation
                     }
                     visibleChannels.push(channel);
                 }
@@ -426,7 +525,6 @@ exports.getServerDetails = async (req, res) => {
             }
         }
 
-        // 4. Combine and return the data
         res.json({
             ...server,
             channels: visibleChannels
@@ -445,14 +543,11 @@ exports.getOrCreateWhisperChannel = async (req, res) => {
         const server = await Server.findById(serverId);
         if (!server) return res.status(404).json({ message: "Server not found" });
 
-        // Ensure we are dealing with owner and someone else
         const isOwner = server.owner.toString() === userId;
         const targetId = isOwner ? recipientId : server.owner.toString();
         
         if (!targetId) return res.status(400).json({ message: "Recipient required" });
 
-        // Check if a whisper channel already exists between these two
-        // In this logic, 'recipient' field in Channel stores the non-owner user
         const otherUser = isOwner ? recipientId : userId;
         
         let channel = await Channel.findOne({
@@ -462,11 +557,10 @@ exports.getOrCreateWhisperChannel = async (req, res) => {
         });
 
         if (!channel) {
-            // Create it
             const recipientUser = await require("../models/User").findById(otherUser);
             channel = await Channel.create({
                 server: serverId,
-                name: recipientUser.username, // Default name for the owner's view
+                name: recipientUser.username,
                 type: 'whisper',
                 icon: 'visibility_off',
                 recipient: otherUser,

@@ -37,23 +37,25 @@ async function start() {
                 const payload = JSON.parse(message);
                 if (payload.type === 'NEW_MESSAGE') {
                     const data = payload.data;
-                    if (data.isWhisper) {
-                        // For whispers, only emit to specifically interested parties.
-                        // We could use private rooms or filter on client side, 
-                        // but let's at least emit to everyone in the channel 
-                        // and they will filter it if we want to keep it simple, 
-                        // OR emit to specific user IDs if we track them.
-                        // Let's emit to the channel for now, clients will handle visibility logic
-                        // (already partially enforced by getMessages query)
-                        io.to(data.channelId).emit('new_message', data);
-                    } else {
-                        io.to(data.channelId).emit('new_message', data);
-                    }
+                    io.to(data.channelId).emit('new_message', data);
                 } else if (payload.type === 'REACTION_UPDATE') {
                     io.to(payload.data.channelId).emit('reaction_update', payload.data);
                 }
             } catch (err) {
                 console.error("Payload error:", err);
+            }
+        });
+
+        await subscriber.subscribe('SERVER_UPDATES', (message) => {
+            try {
+                const payload = JSON.parse(message);
+                if (payload.type === 'MEMBER_UPDATE') {
+                    io.to(`server:${payload.serverId}`).emit('member_update', payload.data);
+                } else if (payload.type === 'CHARACTER_UPDATE') {
+                    io.to(`server:${payload.serverId}`).emit('character_update', payload.data);
+                }
+            } catch (err) {
+                console.error("Server update payload error:", err);
             }
         });
     } catch (err) {
@@ -65,8 +67,13 @@ io.on('connection', (socket) => {
     console.log("User connected to Messaging:", socket.id);
 
     socket.on('join_channel', (channelId) => {
-        console.log(`Socket ${socket.id} joining room ${channelId}`);
+        console.log(`Socket ${socket.id} joining channel ${channelId}`);
         socket.join(channelId);
+    });
+
+    socket.on('join_server', (serverId) => {
+        console.log(`Socket ${socket.id} joining server room server:${serverId}`);
+        socket.join(`server:${serverId}`);
     });
 
     socket.on('disconnect', () => console.log("User disconnected from Messaging"));
