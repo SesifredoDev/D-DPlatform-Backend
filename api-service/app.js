@@ -14,15 +14,25 @@ const spotifyRoutes = require('./routes/spotify.routes');
 
 const app = express();
 
+const allowedOrigins = [
+    'https://d-d-platform.vercel.app',
+    'http://localhost:4200'
+];
+
 app.use(
     cors({
-        origin: (origin, callback) => {
-            // Allow all origins for development, or specify your frontend URL
-            callback(null, true);
+        origin: function(origin, callback) {
+            // Allow requests with no origin (like mobile apps or curl)
+            if (!origin) return callback(null, true);
+            if (allowedOrigins.indexOf(origin) === -1) {
+                var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+                return callback(new Error(msg), false);
+            }
+            return callback(null, true);
         },
         credentials: true,
-        methods: ['GET', 'POST','PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization'],
+        methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
     })
 );
 
@@ -45,7 +55,6 @@ app.use('/server', serverRoutes);
 app.use('/message', messageRoutes);
 app.use('/character', characterRoutes);
 app.use('/spotify', spotifyRoutes);
-
 
 app.get('/livekit/token', async (req, res) => {
     try {
