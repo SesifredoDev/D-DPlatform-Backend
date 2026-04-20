@@ -1,7 +1,10 @@
 const Character = require('../models/Character');
 const mongoose = require("mongoose");
-const {uploadToGridFS} = require("../utils/fileManagement");
+const s3Service = require('../services/s3.service');
+const sharp = require('sharp');
 const redis = require('redis');
+
+const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
 
 const publisher = redis.createClient({ 
     url: process.env.REDIS_URL || 'redis://redis:6379',
@@ -33,6 +36,34 @@ async function notifyCharacterUpdate(serverId, character) {
     }
 }
 
+async function handleFileUpload(file, req) {
+    let fileBuffer = file.buffer;
+    let contentType = file.mimetype;
+    let filename = file.originalname;
+
+    if (contentType.startsWith('image/') && file.size <= SHARP_SIZE_LIMIT) {
+        try {
+            const sharpInstance = sharp(fileBuffer);
+            const metadata = await sharpInstance.metadata();
+            if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
+                fileBuffer = await sharpInstance.jpeg({ quality: 100, progressive: true, mozjpeg: true }).toBuffer();
+                contentType = 'image/jpeg';
+            } else if (metadata.format === 'png') {
+                fileBuffer = await sharpInstance.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+                contentType = 'image/png';
+            } else if (metadata.format === 'webp') {
+                fileBuffer = await sharpInstance.webp({ lossless: true }).toBuffer();
+                contentType = 'image/webp';
+            }
+        } catch (sharpError) {
+            console.warn(`[CharacterController] Sharp processing failed for: ${filename}`, sharpError);
+        }
+    }
+
+    const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
+    return `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
+}
+
 exports.createCharacter = async (req, res) => {
     let iconUrl;
     try {
@@ -42,12 +73,12 @@ exports.createCharacter = async (req, res) => {
 
         if (req.files) {
             if (req.files.icon) {
-                iconUrl = await uploadToGridFS(req.files.icon[0], req);
-            }else{
+                iconUrl = await handleFileUpload(req.files.icon[0], req);
+            } else {
                 iconUrl = charData.icon;
             }
             if (req.files.pdf) {
-                pdfUrl = await uploadToGridFS(req.files.pdf[0],  req);
+                pdfUrl = await handleFileUpload(req.files.pdf[0], req);
             }
         }
 
@@ -130,10 +161,10 @@ exports.updateCharacter = async (req, res) => {
 
         if (req.files) {
             if (req.files.icon) {
-                updateFields.icon = await uploadToGridFS(req.files.icon[0], req);
+                updateFields.icon = await handleFileUpload(req.files.icon[0], req);
             }
             if (req.files.pdf) {
-                updateFields.pdfLink = await uploadToGridFS(req.files.pdf[0], req);
+                updateFields.pdfLink = await handleFileUpload(req.files.pdf[0], req);
             }
         }
 

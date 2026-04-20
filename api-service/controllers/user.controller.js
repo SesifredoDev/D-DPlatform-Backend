@@ -1,30 +1,40 @@
 const User = require('../models/User');
+const s3Service = require('../services/s3.service');
+const sharp = require('sharp');
 
-const getBucket = require("../services/gridfs.service");
-const mongoose = require("mongoose");
+const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
 
 exports.uploadProfileIcon = async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const bucket = getBucket();
-    if (!bucket) {
-        return res.status(500).json({ message: "GridFS not ready" });
-    }
+    try {
+        let fileBuffer = req.file.buffer;
+        let contentType = req.file.mimetype;
+        let filename = req.file.originalname;
 
-    const fileId = new mongoose.Types.ObjectId();
+        if (contentType.startsWith('image/') && req.file.size <= SHARP_SIZE_LIMIT) {
+            try {
+                const sharpInstance = sharp(fileBuffer);
+                const metadata = await sharpInstance.metadata();
+                if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
+                    fileBuffer = await sharpInstance.jpeg({ quality: 100, progressive: true, mozjpeg: true }).toBuffer();
+                    contentType = 'image/jpeg';
+                } else if (metadata.format === 'png') {
+                    fileBuffer = await sharpInstance.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+                    contentType = 'image/png';
+                } else if (metadata.format === 'webp') {
+                    fileBuffer = await sharpInstance.webp({ lossless: true }).toBuffer();
+                    contentType = 'image/webp';
+                }
+            } catch (sharpError) {
+                console.warn(`[UserController] Sharp processing failed for: ${filename}`, sharpError);
+            }
+        }
 
-    const uploadStream = bucket.openUploadStreamWithId(
-        fileId,
-        req.file.originalname,
-        { contentType: req.file.mimetype }
-    );
-
-    uploadStream.end(req.file.buffer);
-
-    uploadStream.on("finish", async () => {
-        const fileUrl = `${req.protocol}://${req.get("host")}/api/files/${fileId}`;
+        const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
+        const fileUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
 
         const user = await User.findByIdAndUpdate(
             req.user.id,
@@ -33,11 +43,10 @@ exports.uploadProfileIcon = async (req, res) => {
         ).select("-password");
 
         res.json({ message: "Profile icon updated", user });
-    });
-
-    uploadStream.on("error", (err) => {
-        res.status(500).json({ error: err.message });
-    });
+    } catch (error) {
+        console.error("[UserController] Upload error:", error);
+        res.status(500).json({ message: "S3 upload failed processing" });
+    }
 };
 
 exports.getMe = async (req, res) => {

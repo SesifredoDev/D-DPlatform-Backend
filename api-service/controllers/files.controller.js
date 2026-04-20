@@ -70,12 +70,13 @@ exports.uploadFile = async (req, res) => {
         }
 
         const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
+        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
 
         res.status(201).json({
             id: uploadedAsset.id,
             filename: uploadedAsset.filename,
             contentType: uploadedAsset.contentType,
-            url: `/api/files/${uploadedAsset.key}` // Point to our proxy route
+            url: fullUrl // Point to our proxy route with full URL
         });
     } catch (error) {
         console.error("[FilesController] Upload error:", error);
@@ -146,6 +147,7 @@ exports.finalizeUpload = async (req, res) => {
         }
 
         const uploadedAsset = await s3Service.uploadToS3(finalBuffer, fileName, contentType);
+        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
 
         // Cleanup
         await fs.remove(chunkDir).catch(e => console.error("[FilesController] Failed to cleanup chunks:", e));
@@ -154,7 +156,7 @@ exports.finalizeUpload = async (req, res) => {
             id: uploadedAsset.id,
             filename: uploadedAsset.filename,
             contentType: uploadedAsset.contentType,
-            url: `/api/files/${uploadedAsset.key}` // Point to our proxy route
+            url: fullUrl // Point to our proxy route with full URL
         });
 
     } catch (error) {

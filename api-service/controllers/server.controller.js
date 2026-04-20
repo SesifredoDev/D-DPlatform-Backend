@@ -72,7 +72,7 @@ function generateJoinCode() {
     return crypto.randomBytes(4).toString("hex");
 }
 
-async function handleIconUpload(file) {
+async function handleIconUpload(file, req) {
     let fileBuffer = file.buffer;
     let contentType = file.mimetype;
     let filename = file.originalname;
@@ -97,7 +97,7 @@ async function handleIconUpload(file) {
     }
 
     const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
-    return `/api/files/${uploadedAsset.key}`;
+    return `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
 }
 
 /**
@@ -109,7 +109,7 @@ exports.createServer = async (req, res) => {
     let iconUrl = icon;
 
     if (req.files && req.files.icon) {
-        iconUrl = await handleIconUpload(req.files.icon[0]);
+        iconUrl = await handleIconUpload(req.files.icon[0], req);
     }
 
     const server = await Server.create({
@@ -326,7 +326,7 @@ exports.updateServer = async (req, res) => {
     }
 
     if (req.files && req.files.icon) {
-        server.icon = await handleIconUpload(req.files.icon[0]);
+        server.icon = await handleIconUpload(req.files.icon[0], req);
     } else if (icon !== undefined) {
         server.icon = icon;
     }
