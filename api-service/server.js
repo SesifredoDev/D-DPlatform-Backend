@@ -8,7 +8,7 @@ const app = require('./app');
 require('dotenv').config(); 
 
 // Support the specific naming convention if those files exist
-const envFile = process.env.NODE_ENV === 'production' ? '.env.development.production' : '.env.development.development';
+const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
 require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
 
 const server = http.createServer(app);
