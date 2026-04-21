@@ -2,6 +2,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const { AccessToken } = require('livekit-server-sdk');
+const axios = require('axios');
 
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
@@ -81,19 +82,27 @@ app.get('/livekit/token', async (req, res) => {
         
         const token = await at.toJwt();
 
-        const iceServers = [
-            { urls: 'stun:stun.relay.metered.ca:80' },
-            {
-                urls: [
-                    'turn:global.relay.metered.ca:80',
-                    'turn:global.relay.metered.ca:80?transport=tcp',
-                    'turn:global.relay.metered.ca:443',
-                    'turns:global.relay.metered.ca:443?transport=tcp'
-                ],
-                username: process.env.METERED_USERNAME,
-                credential: process.env.METERED_CREDENTIAL
-            }
-        ];
+        let iceServers = [];
+        try {
+            const meteredApiKey = process.env.METERED_SECRET_KEY || '1186d9c786f96006023c36e08c6e19cb5886';
+            const response = await axios.get(`https://dissertation.metered.live/api/v1/turn/credentials?apiKey=${meteredApiKey}`);
+            iceServers = response.data;
+        } catch (meteredError) {
+            console.error('Failed to fetch Metered credentials, using fallbacks:', meteredError.message);
+            iceServers = [
+                { urls: 'stun:stun.relay.metered.ca:80' },
+                {
+                    urls: [
+                        'turn:global.relay.metered.ca:80',
+                        'turn:global.relay.metered.ca:80?transport=tcp',
+                        'turn:global.relay.metered.ca:443',
+                        'turns:global.relay.metered.ca:443?transport=tcp'
+                    ],
+                    username: process.env.METERED_USERNAME,
+                    credential: process.env.METERED_CREDENTIAL
+                }
+            ];
+        }
 
         res.send({ 
             token: token,
