@@ -17,8 +17,7 @@ const app = express();
 
 const allowedOrigins = [
     'https://d-d-platform.vercel.app',
-    'http://localhost:4200',
-    '*'
+    'http://localhost:4200'
 ];
 
 app.use(
@@ -26,11 +25,11 @@ app.use(
         origin: function(origin, callback) {
             // Allow requests with no origin (like mobile apps or curl)
             if (!origin) return callback(null, true);
-            if (allowedOrigins.indexOf(origin) === -1) {
-                var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-                return callback(new Error(msg), false);
+            if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+                return callback(null, true);
             }
-            return callback(null, true);
+            var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
         },
         credentials: true,
         methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
