@@ -44,21 +44,18 @@ describe('Token Service', () => {
     describe('generateRefreshToken', () => {
         it('should generate a random refresh token', () => {
             crypto.randomBytes.mockReturnValue(Buffer.from('mockRandomBytes'));
-            crypto.createHash.mockReturnThis();
-            crypto.update.mockReturnThis();
-            crypto.digest.mockReturnValue('mockRefreshTokenHash');
-
             const token = tokenService.generateRefreshToken();
             expect(crypto.randomBytes).toHaveBeenCalledWith(64);
-            expect(token).toBe('6d6f636b52616e646f6d4279746573'); // 'mockRandomBytes' in hex
+            expect(token).toBe(Buffer.from('mockRandomBytes').toString('hex'));
         });
     });
 
     describe('createRefreshToken', () => {
         it('should create and save a refresh token', async () => {
-            const mockToken = 'mockRefreshToken';
+            const mockToken = '6d6f636b52616e646f6d4279746573'; // 'mockRandomBytes' in hex
             const mockTokenHash = 'mockRefreshTokenHash';
-            tokenService.generateRefreshToken = jest.fn().mockReturnValue(mockToken);
+            
+            crypto.randomBytes.mockReturnValue(Buffer.from('mockRandomBytes'));
             crypto.createHash.mockReturnThis();
             crypto.update.mockReturnThis();
             crypto.digest.mockReturnValue(mockTokenHash);
@@ -66,7 +63,7 @@ describe('Token Service', () => {
 
             const result = await tokenService.createRefreshToken(mockUser._id);
 
-            expect(tokenService.generateRefreshToken).toHaveBeenCalled();
+            expect(crypto.randomBytes).toHaveBeenCalled();
             expect(crypto.createHash).toHaveBeenCalledWith('sha256');
             expect(crypto.update).toHaveBeenCalledWith(mockToken);
             expect(crypto.digest).toHaveBeenCalledWith('hex');
@@ -82,21 +79,22 @@ describe('Token Service', () => {
         it('should invalidate old token and create a new one', async () => {
             const oldToken = 'oldRefreshToken';
             const oldTokenHash = 'oldRefreshTokenHash';
-            const newToken = 'newRefreshToken';
+            const newTokenBytes = Buffer.from('newRandomBytes');
+            const newToken = newTokenBytes.toString('hex');
             const newTokenHash = 'newRefreshTokenHash';
 
+            crypto.randomBytes.mockReturnValue(newTokenBytes);
             crypto.createHash
                 .mockReturnValueOnce({ update: jest.fn().mockReturnThis(), digest: jest.fn().mockReturnValue(oldTokenHash) })
                 .mockReturnValueOnce({ update: jest.fn().mockReturnThis(), digest: jest.fn().mockReturnValue(newTokenHash) });
             
             RefreshToken.deleteOne.mockResolvedValue({ deletedCount: 1 });
-            tokenService.generateRefreshToken = jest.fn().mockReturnValue(newToken);
             RefreshToken.create.mockResolvedValue({});
 
             const result = await tokenService.rotateRefreshToken(oldToken, mockUser._id);
 
             expect(RefreshToken.deleteOne).toHaveBeenCalledWith({ tokenHash: oldTokenHash });
-            expect(tokenService.generateRefreshToken).toHaveBeenCalled();
+            expect(crypto.randomBytes).toHaveBeenCalled();
             expect(RefreshToken.create).toHaveBeenCalledWith(expect.objectContaining({
                 user: mockUser._id,
                 tokenHash: newTokenHash,

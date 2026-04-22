@@ -3,13 +3,11 @@ const { GridFSBucket } = require("mongodb");
 
 // Mocking the entire mongoose connection to trigger the 'once' event
 jest.mock("mongoose", () => {
-    const originalMongoose = jest.requireActual("mongoose");
+    const EventEmitter = require('events');
+    const mockConn = new EventEmitter();
+    mockConn.db = { some: 'db' };
     return {
-        ...originalMongoose,
-        connection: {
-            once: jest.fn(),
-            db: { some: 'db' }
-        }
+        connection: mockConn
     };
 });
 jest.mock("mongodb");
@@ -23,14 +21,11 @@ describe('GridFS Service', () => {
     });
 
     it('should initialize bucket when mongoose connection opens', () => {
-        const mockOnce = mongoose.connection.once;
-        expect(mockOnce).toHaveBeenCalledWith('open', expect.any(Function));
-
-        const openCallback = mockOnce.mock.calls[0][1];
         const mockBucketInstance = { name: 'mockBucket' };
         GridFSBucket.mockImplementation(() => mockBucketInstance);
 
-        openCallback(); // Manually trigger the callback
+        // Simulate the 'open' event on the mocked connection
+        mongoose.connection.emit('open');
 
         expect(GridFSBucket).toHaveBeenCalledWith(mongoose.connection.db, {
             bucketName: "uploads",
