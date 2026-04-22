@@ -5,7 +5,7 @@ const { GridFSBucket } = require("mongodb");
 jest.mock("mongoose", () => ({
     connection: {
         once: jest.fn(),
-        db: { some: 'db' }
+        db: { some: 'db' } // Mock the db object as well
     }
 }));
 
@@ -16,26 +16,28 @@ jest.mock("mongodb", () => ({
 
 describe('GridFS Service', () => {
     let gridfsService;
+    let openCallback;
 
     beforeEach(() => {
-        jest.resetModules();
+        jest.resetModules(); // Clear module cache for clean slate
         jest.clearAllMocks();
+
+        // Set up the mockImplementation for mongoose.connection.once BEFORE requiring the service
+        mongoose.connection.once.mockImplementation((event, cb) => {
+            if (event === 'open') {
+                openCallback = cb; // Capture the callback
+            }
+        });
     });
 
     it('should initialize bucket when mongoose connection opens', () => {
-        // Capture the callback passed to once('open', ...)
-        let openCallback;
-        mongoose.connection.once.mockImplementation((event, cb) => {
-            if (event === 'open') openCallback = cb;
-        });
-
-        // Require the service to trigger the once() call
+        // Require the service AFTER the mock for mongoose.connection.once is set up
         gridfsService = require('../../services/gridfs.service');
 
         const mockBucketInstance = { name: 'mockBucket' };
         GridFSBucket.mockImplementation(() => mockBucketInstance);
 
-        // Manually trigger the callback
+        // Manually trigger the captured callback
         if (openCallback) {
             openCallback();
         } else {
@@ -49,6 +51,7 @@ describe('GridFS Service', () => {
     });
 
     it('should return undefined if bucket is not yet initialized', () => {
+        // Require the service, but don't trigger the 'open' callback
         gridfsService = require('../../services/gridfs.service');
         expect(gridfsService()).toBeUndefined();
     });
