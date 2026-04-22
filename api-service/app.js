@@ -33,7 +33,19 @@ app.use(
         },
         credentials: true,
         methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+        allowedHeaders: [
+            'Content-Type', 
+            'Authorization', 
+            'X-Requested-With', 
+            'Accept', 
+            'Origin', 
+            'DNT', 
+            'User-Agent', 
+            'If-Modified-Since', 
+            'Cache-Control', 
+            'Range'
+        ],
+        exposedHeaders: ['Content-Range', 'X-Content-Range'],
     })
 );
 

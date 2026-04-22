@@ -50,6 +50,7 @@ services:
     image: nginx:alpine
     volumes:
       - ./nginx.local.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     ports:
       - "80:80"
       - "443:443"
