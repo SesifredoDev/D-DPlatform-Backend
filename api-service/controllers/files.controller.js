@@ -10,7 +10,7 @@ const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
 /**
  * Proxy S3 file through API:
  * GET /api/files/:id
- * (Here :id is the S3 key, which is now just a UUID)
+ * (Here :id is the full S3 key, e.g. uuid-filename.ext)
  */
 exports.getFile = async (req, res) => {
     try {
@@ -26,8 +26,9 @@ exports.getFile = async (req, res) => {
         res.set('Content-Type', contentType);
         if (contentLength) res.set('Content-Length', contentLength);
         
-        // Content-Disposition inline for viewing in browser
-        res.set('Content-Disposition', `inline`);
+        // Use Content-Disposition inline for viewing in browser, with filename if possible
+        const filename = key.split('-').slice(1).join('-') || 'file';
+        res.set('Content-Disposition', `inline; filename="${filename}"`);
 
         // Stream the S3 object body directly to the Express response
         stream.pipe(res);
