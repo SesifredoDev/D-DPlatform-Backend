@@ -27,7 +27,19 @@ const publisher = redis.createClient({
 publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
 publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
 
-async function notifyMemberUpdate(serverId) {
+function getFileFullUrl(req, key) {
+    if (!key) return null;
+    if (key.startsWith('http')) return key;
+    return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function processUserIcon(req, user) {
+    if (user && user.profileIcon) {
+        user.profileIconUrl = getFileFullUrl(req, user.profileIcon);
+    }
+}
+
+async function notifyMemberUpdate(req, serverId) {
     if (!publisher.isOpen) return;
     
     // Fetch fresh server details to send to clients
@@ -50,12 +62,16 @@ async function notifyMemberUpdate(serverId) {
                  const ownerId = char.ownerId.toString();
                  if (!charactersByOwner[ownerId]) charactersByOwner[ownerId] = [];
                  charactersByOwner[ownerId].push(char);
+                 if (char.icon) char.iconUrl = getFileFullUrl(req, char.icon);
              }
 
-             const members = server.members.map(member => ({
-                 ...member,
-                 characters: charactersByOwner[member.user._id.toString()] || []
-             }));
+             const members = server.members.map(member => {
+                 processUserIcon(req, member.user);
+                 return {
+                     ...member,
+                     characters: charactersByOwner[member.user._id.toString()] || []
+                 }
+             });
 
              await publisher.publish('SERVER_UPDATES', JSON.stringify({
                  type: 'MEMBER_UPDATE',
@@ -97,7 +113,7 @@ async function handleIconUpload(file, req) {
     }
 
     const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
-    return `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
+    return uploadedAsset.key; // Return only the key
 }
 
 /**
@@ -106,15 +122,15 @@ async function handleIconUpload(file, req) {
 exports.createServer = async (req, res) => {
     const userId = req.user.id;
     const { name, icon } = req.body;
-    let iconUrl = icon;
+    let iconKey = icon;
 
     if (req.files && req.files.icon) {
-        iconUrl = await handleIconUpload(req.files.icon[0], req);
+        iconKey = await handleIconUpload(req.files.icon[0], req);
     }
 
     const server = await Server.create({
         name,
-        icon: iconUrl,
+        icon: iconKey,
         owner: userId,
         joinCode: generateJoinCode(),
     });
@@ -137,7 +153,11 @@ exports.createServer = async (req, res) => {
     });
 
     await server.save();
-    res.status(201).json(server);
+    
+    const serverObj = server.toObject();
+    serverObj.iconUrl = getFileFullUrl(req, serverObj.icon);
+    
+    res.status(201).json(serverObj);
 };
 
 /**
@@ -164,10 +184,9 @@ exports.joinServer = async (req, res) => {
         roles: everyoneRole ? [everyoneRole._id] : []
     });
 
-    // server.joinCode = generateJoinCode(); // Removed to prevent code change on every join
     await server.save();
 
-    await notifyMemberUpdate(server._id);
+    await notifyMemberUpdate(req, server._id);
 
     res.json({ message: "Joined server", serverId: server._id });
 };
@@ -262,7 +281,7 @@ exports.updateRole = async (req, res) => {
             return res.status(404).json({ message: "Role not found" });
         }
 
-        await notifyMemberUpdate(serverId);
+        await notifyMemberUpdate(req, serverId);
 
         res.json(updatedRole);
     } catch (error) {
@@ -300,7 +319,7 @@ exports.deleteRole = async (req, res) => {
         });
 
         await server.save();
-        await notifyMemberUpdate(serverId);
+        await notifyMemberUpdate(req, serverId);
 
         res.json({ message: "Role deleted and removed from all members" });
     } catch (error) {
@@ -334,7 +353,11 @@ exports.updateServer = async (req, res) => {
     if (name) server.name = name;
 
     await server.save();
-    res.json(server);
+    
+    const serverObj = server.toObject();
+    serverObj.iconUrl = getFileFullUrl(req, serverObj.icon);
+    
+    res.json(serverObj);
 };
 
 exports.updateMemberRoles = async (req, res) => {
@@ -369,7 +392,7 @@ exports.updateMemberRoles = async (req, res) => {
         targetMember.roles = roles;
 
         await server.save();
-        await notifyMemberUpdate(serverId);
+        await notifyMemberUpdate(req, serverId);
 
         res.json({
             message: "Member roles updated successfully",
@@ -413,6 +436,7 @@ exports.getUserServers= async (req, res) => {
             _id: server._id,
             name: server.name,
             icon: server.icon,
+            iconUrl: getFileFullUrl(req, server.icon)
         };
     });
 
@@ -444,7 +468,7 @@ exports.leaveServer = async (req, res) =>{
     await Character.deleteMany({ servers: serverId, ownerId: userId });
     await server.save();
     
-    await notifyMemberUpdate(serverId);
+    await notifyMemberUpdate(req, serverId);
 
     res.json({ message: "Left server" });
 }
@@ -495,16 +519,26 @@ exports.getServerDetails = async (req, res) => {
             if (!charactersByOwner[ownerId]) {
                 charactersByOwner[ownerId] = [];
             }
+            
+            if (char.icon) {
+                char.iconUrl = getFileFullUrl(req, char.icon);
+            }
 
             charactersByOwner[ownerId].push(char);
         }
 
         // Attach characters to members
-        server.members = server.members.map(member => ({
-            ...member,
-            characters: charactersByOwner[member.user._id.toString()] || []
-        }));
+        server.members = server.members.map(member => {
+            processUserIcon(req, member.user);
+            return {
+                ...member,
+                characters: charactersByOwner[member.user._id.toString()] || []
+            }
+        });
 
+        if (server.icon) {
+            server.iconUrl = getFileFullUrl(req, server.icon);
+        }
 
         const allChannels = await Channel.find({ server: serverId }).sort({ position: 1 });
 

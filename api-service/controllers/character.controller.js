@@ -22,14 +22,32 @@ const publisher = redis.createClient({
 publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
 publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
 
-async function notifyCharacterUpdate(serverId, character) {
+function getFileFullUrl(req, key) {
+    if (!key) return null;
+    if (key.startsWith('http')) return key;
+    return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function processCharacterUrls(req, character) {
+    if (character.icon) {
+        character.iconUrl = getFileFullUrl(req, character.icon);
+    }
+    if (character.pdfLink) {
+        character.pdfLinkUrl = getFileFullUrl(req, character.pdfLink);
+    }
+}
+
+async function notifyCharacterUpdate(req, serverId, character) {
     if (!publisher.isOpen || !serverId) return;
     
     try {
+        const charObj = character.toObject ? character.toObject() : character;
+        processCharacterUrls(req, charObj);
+
         await publisher.publish('SERVER_UPDATES', JSON.stringify({
             type: 'CHARACTER_UPDATE',
             serverId: serverId,
-            data: character
+            data: charObj
         }));
     } catch (err) {
         console.error("Error notifying character update:", err);
@@ -61,24 +79,22 @@ async function handleFileUpload(file, req) {
     }
 
     const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
-    return `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
+    return uploadedAsset.key;
 }
 
 exports.createCharacter = async (req, res) => {
-    let iconUrl;
     try {
         const charData = req.body;
         const userId = req.user.id;
-        let pdfUrl = charData.pdfLink;
+        let iconKey = charData.icon;
+        let pdfKey = charData.pdfLink;
 
         if (req.files) {
             if (req.files.icon) {
-                iconUrl = await handleFileUpload(req.files.icon[0], req);
-            } else {
-                iconUrl = charData.icon;
+                iconKey = await handleFileUpload(req.files.icon[0], req);
             }
             if (req.files.pdf) {
-                pdfUrl = await handleFileUpload(req.files.pdf[0], req);
+                pdfKey = await handleFileUpload(req.files.pdf[0], req);
             }
         }
 
@@ -91,9 +107,9 @@ exports.createCharacter = async (req, res) => {
             ownerId: userId,
             name: charData.name,
             race: charData.race,
-            icon: iconUrl,
+            icon: iconKey,
             ddbId: charData.ddbId || null,
-            pdfLink: pdfUrl || null,
+            pdfLink: pdfKey || null,
             baseStats: typeof charData.baseStats === 'string'
                 ? JSON.parse(charData.baseStats) : charData.baseStats,
             classes: typeof charData.classes === 'string'
@@ -113,10 +129,13 @@ exports.createCharacter = async (req, res) => {
         });
 
         if (charData.serverId) {
-            await notifyCharacterUpdate(charData.serverId, character);
+            await notifyCharacterUpdate(req, charData.serverId, character);
         }
 
-        res.status(201).json(character);
+        const charObj = character.toObject();
+        processCharacterUrls(req, charObj);
+
+        res.status(201).json(charObj);
     } catch (error) {
         console.error("Error saving character:", error);
         res.status(500).json({error: error.message});
@@ -184,7 +203,7 @@ exports.updateCharacter = async (req, res) => {
         // Notify current servers
         if (updatedCharacter.servers && updatedCharacter.servers.length > 0) {
             for (const serverId of updatedCharacter.servers) {
-                await notifyCharacterUpdate(serverId, updatedCharacter);
+                await notifyCharacterUpdate(req, serverId, updatedCharacter);
             }
         }
 
@@ -204,7 +223,10 @@ exports.updateCharacter = async (req, res) => {
             }
         }
 
-        res.status(200).json(updatedCharacter);
+        const charObj = updatedCharacter.toObject();
+        processCharacterUrls(req, charObj);
+
+        res.status(200).json(charObj);
     } catch (error) {
         console.error("Error updating character:", error);
         res.status(500).json({ error: error.message });
@@ -213,9 +235,11 @@ exports.updateCharacter = async (req, res) => {
 
 exports.getMyCharacters = async (req, res) => {
     try {
-
         const characters = await Character.find({ ownerId: req.user.id })
-            .sort({ lastUpdated: -1 });
+            .sort({ lastUpdated: -1 }).lean();
+        
+        characters.forEach(char => processCharacterUrls(req, char));
+
         res.status(200).json(characters);
     } catch (error) {
         res.status(500).json({ message: "Error fetching characters." });

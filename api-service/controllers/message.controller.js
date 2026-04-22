@@ -21,6 +21,32 @@ const publisher = redis.createClient({
 publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
 publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
 
+function getFileFullUrl(req, key) {
+    if (!key) return null;
+    if (key.startsWith('http')) return key;
+    return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function processIconUrls(req, message) {
+    if (message.author && message.author.profileIcon) {
+        message.author.profileIconUrl = getFileFullUrl(req, message.author.profileIcon);
+    }
+    if (message.recipient && message.recipient.profileIcon) {
+        message.recipient.profileIconUrl = getFileFullUrl(req, message.recipient.profileIcon);
+    }
+    if (message.character && message.character.icon) {
+        message.character.iconUrl = getFileFullUrl(req, message.character.icon);
+    }
+    if (message.replyTo) {
+        if (message.replyTo.author && message.replyTo.author.profileIcon) {
+            message.replyTo.author.profileIconUrl = getFileFullUrl(req, message.replyTo.author.profileIcon);
+        }
+        if (message.replyTo.character && message.replyTo.character.icon) {
+            message.replyTo.character.iconUrl = getFileFullUrl(req, message.replyTo.character.icon);
+        }
+    }
+}
+
 /* ===== PERMISSIONS ===== */
 
 const canPerformAction = async (serverId, userId, channel, permissionName) => {
@@ -93,17 +119,16 @@ exports.sendMessage = async (req, res) => {
             { 
                 path: "replyTo", 
                 populate: [
-                    { path: "author", select: "username" },
-                    { path: "character", select: "name" }
+                    { path: "author", select: "username avatar profileIcon" },
+                    { path: "character", select: "name icon" }
                 ]
             },
             { path: "recipient", select: "username avatar profileIcon" }
         ]);
 
-        const payload = {
-            ...message.toObject(),
-            channelId
-        };
+        const payload = message.toObject();
+        payload.channelId = channelId;
+        processIconUrls(req, payload);
 
         if (publisher.isOpen) {
             await publisher.publish('CHAT_MESSAGES', JSON.stringify({ type: 'NEW_MESSAGE', data: payload }));
@@ -212,14 +237,7 @@ exports.getMessages = async (req, res) => {
             ]
         };
 
-        // If user is server owner, they can see all whispers? 
-        // User asked: "users can send the owner 'DM Whispers' within the server. The server owner (DM) can message using the same method, like a private text channel"
-        // This implies whispers are ALWAYS between a user and the owner.
-        
         if (server.owner.toString() === userId) {
-            // Owner can see all messages in the channel? 
-            // Or specifically all whispers?
-            // If it's a "private text channel" feel, owner sees everything.
             delete query.$or;
             query.channel = channelId;
         }
@@ -233,10 +251,13 @@ exports.getMessages = async (req, res) => {
             .populate({
                 path: "replyTo",
                 populate: [
-                    { path: "author", select: "username" },
-                    { path: "character", select: "name" }
+                    { path: "author", select: "username avatar profileIcon" },
+                    { path: "character", select: "name icon" }
                 ]
-            });
+            })
+            .lean();
+
+        messages.forEach(msg => processIconUrls(req, msg));
 
         res.json(messages);
     } catch (err) {
