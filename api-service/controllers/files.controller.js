@@ -10,11 +10,11 @@ const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
 /**
  * Proxy S3 file through API:
  * GET /api/files/:id
- * (Here :id will actually be the S3 key)
+ * (Here :id is the S3 key, which is now just a UUID)
  */
 exports.getFile = async (req, res) => {
     try {
-        const key = req.params.id; // S3 Key (e.g. uuid-filename.jpg)
+        const key = req.params.id; 
         
         console.log(`[FilesController] Proxying request for S3 key: ${key}`);
         const { stream, contentType, contentLength } = await s3Service.getObjectStream(key);
@@ -26,8 +26,8 @@ exports.getFile = async (req, res) => {
         res.set('Content-Type', contentType);
         if (contentLength) res.set('Content-Length', contentLength);
         
-        // Optionally set Content-Disposition to inline
-        res.set('Content-Disposition', `inline; filename="${key.split('-').slice(1).join('-')}"`);
+        // Content-Disposition inline for viewing in browser
+        res.set('Content-Disposition', `inline`);
 
         // Stream the S3 object body directly to the Express response
         stream.pipe(res);
@@ -76,7 +76,7 @@ exports.uploadFile = async (req, res) => {
             id: uploadedAsset.id,
             filename: uploadedAsset.filename,
             contentType: uploadedAsset.contentType,
-            url: fullUrl // Point to our proxy route with full URL
+            url: fullUrl 
         });
     } catch (error) {
         console.error("[FilesController] Upload error:", error);
@@ -156,7 +156,7 @@ exports.finalizeUpload = async (req, res) => {
             id: uploadedAsset.id,
             filename: uploadedAsset.filename,
             contentType: uploadedAsset.contentType,
-            url: fullUrl // Point to our proxy route with full URL
+            url: fullUrl
         });
 
     } catch (error) {

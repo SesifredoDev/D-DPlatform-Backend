@@ -15,7 +15,8 @@ const s3Client = new S3Client({
  */
 exports.uploadToS3 = async (buffer, filename, contentType) => {
     const fileId = crypto.randomUUID();
-    const key = `${fileId}-${filename}`;
+    // Simplified key to just the UUID to avoid mismatch issues
+    const key = fileId;
 
     console.log(`[S3Service] Uploading to S3: ${key} (${contentType})`);
 
