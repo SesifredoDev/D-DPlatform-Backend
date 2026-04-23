@@ -1,4 +1,9 @@
-const io = require('socket.io')(3003, {
+const http = require('http');
+const { Server } = require('socket.io');
+const { createClient } = require('redis');
+
+const server = http.createServer();
+const io = new Server(server, {
     path: '/map/',
     cors: { origin: true },
     transports: ['websocket'],
@@ -6,7 +11,6 @@ const io = require('socket.io')(3003, {
     maxHttpBufferSize: 5e7
 });
 
-const { createClient } = require('redis');
 const redisClient = createClient({
     url: process.env.REDIS_URL || 'redis://redis:6379',
     socket: {
@@ -20,7 +24,11 @@ const redisClient = createClient({
     }
 });
 
-redisClient.on('error', err => console.error('Redis Error:', err));
+redisClient.on('error', err => {
+    if (process.env.NODE_ENV !== 'test') {
+        console.error('Redis Error:', err);
+    }
+});
 
 class RoomQueue {
     constructor() { this.queue = Promise.resolve(); }
@@ -35,17 +43,45 @@ const runInQueue = (roomId, task) => {
     return roomQueues.get(roomId).add(task);
 };
 
-async function startServer() {
-    try {
-        await redisClient.connect();
-        console.log('Connected to Redis for Room Persistence');
-    } catch (err) {
-        console.error("Redis initial connection failed, retrying in background...", err);
-    }
-
-    const debug = (msg, data = '') => {
+const debug = (msg, data = '') => {
+    if (process.env.NODE_ENV !== 'test') {
         console.log(`[${new Date().toLocaleTimeString()}] ${msg}`, data);
-    };
+    }
+};
+
+async function checkAndCleanupRoom(roomId, socketId, isDisconnectingEvent = false, client = redisClient) {
+    const room = io.sockets.adapter.rooms.get(roomId);
+    const userCount = room ? room.size : 0;
+    const isEmpty = isDisconnectingEvent ? userCount <= 1 : userCount === 0;
+
+    if (isEmpty) {
+        debug(`Room ${roomId} is empty. Cleaning up state.`);
+        await client.del(`room:${roomId}`);
+        await client.del(`room:${roomId}:host`);
+        roomQueues.delete(roomId);
+    } else {
+        const hostKey = `room:${roomId}:host`;
+        const currentHostId = await client.get(hostKey);
+
+        if (currentHostId === socketId) {
+            debug(`Host left room ${roomId}. Reassigning or waiting for new host.`);
+            io.to(roomId).emit('host-disconnected');
+            await client.del(hostKey);
+        }
+    }
+}
+
+async function start(client = redisClient) {
+    try {
+        if (!client.isOpen) {
+            await client.connect();
+        }
+        debug('Connected to Redis for Room Persistence');
+    } catch (err) {
+        if (process.env.NODE_ENV !== 'test') {
+            console.error("Redis initial connection failed, retrying in background...", err);
+        }
+    }
 
     io.on('connection', (socket) => {
         debug(`New Connection: ${socket.id}`);
@@ -54,14 +90,14 @@ async function startServer() {
             debug(`HOST REQUEST for Room: ${roomId}`);
             socket.join(roomId);
 
-            if (!redisClient.isOpen) {
+            if (!client.isOpen) {
                 socket.emit('error', 'Server not ready: Redis connection lost.');
                 return;
             }
 
-            await redisClient.set(`room:${roomId}:host`, socket.id, { EX: 86400 });
+            await client.set(`room:${roomId}:host`, socket.id, { EX: 86400 });
 
-            const existingState = await redisClient.get(`room:${roomId}`);
+            const existingState = await client.get(`room:${roomId}`);
             if (existingState && !initialState) {
                 try {
                     socket.emit('map-update', JSON.parse(existingState));
@@ -71,7 +107,7 @@ async function startServer() {
             } else {
                 const state = initialState || { tokens: [], walls: [], gridSize: 50 };
                 state.version = 0;
-                await redisClient.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
+                await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
             }
 
             socket.to(roomId).emit('host-changed', { hostId: socket.id });
@@ -80,19 +116,19 @@ async function startServer() {
         socket.on('join-session', async ({ roomId, character }) => {
             debug(`JOIN ATTEMPT: ${socket.id} for Room ${roomId}`);
 
-            if (!redisClient.isOpen) {
+            if (!client.isOpen) {
                 socket.emit('error', 'Server not ready: Redis connection lost.');
                 return;
             }
 
-            let stateRaw = await redisClient.get(`room:${roomId}`);
+            let stateRaw = await client.get(`room:${roomId}`);
             if (stateRaw) {
                 try {
                     let state = JSON.parse(stateRaw);
                     socket.join(roomId);
                     socket.emit('map-update', state);
 
-                    const currentHost = await redisClient.get(`room:${roomId}:host`);
+                    const currentHost = await client.get(`room:${roomId}:host`);
                     socket.emit('host-changed', { hostId: currentHost });
                 } catch (e) {
                     socket.emit('error', 'Room state is corrupted.');
@@ -102,23 +138,21 @@ async function startServer() {
             }
         });
 
-        // ROBUSTNESS FIX 2: Added stop-hosting and leave-session handlers
         socket.on('stop-hosting', async (roomId) => {
-            await redisClient.del(`room:${roomId}:host`);
+            await client.del(`room:${roomId}:host`);
             socket.to(roomId).emit('host-disconnected');
         });
 
         socket.on('leave-session', async (roomId) => {
             socket.leave(roomId);
-            await checkAndCleanupRoom(roomId, socket.id);
+            await checkAndCleanupRoom(roomId, socket.id, false, client);
         });
 
         socket.on('sync-action', ({ roomId, action, data }) => {
-            // Push action to the room's execution queue
             runInQueue(roomId, async () => {
-                if (!redisClient.isOpen) return;
+                if (!client.isOpen) return;
 
-                const stateRaw = await redisClient.get(`room:${roomId}`);
+                const stateRaw = await client.get(`room:${roomId}`);
                 if (!stateRaw) return;
 
                 let state;
@@ -128,7 +162,6 @@ async function startServer() {
 
                 state.version = (state.version || 0) + 1;
 
-                // Update state based on action
                 switch(action) {
                     case 'token-move':
                         if (Array.isArray(state.tokens)) {
@@ -162,7 +195,7 @@ async function startServer() {
                         break;
                     case 'token-deleted':
                         if (state.tokens) {
-                            state.tokens = state.tokens.filter(t => t.id === data.id);
+                            state.tokens = state.tokens.filter(t => t.id !== data.id);
                         }
                         break;
                     case 'token-update':
@@ -210,14 +243,14 @@ async function startServer() {
                         break;
                 }
 
-                await redisClient.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
+                await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
                 io.to(roomId).emit('remote-action', { action, data, version: state.version });
             });
         });
 
         socket.on('request-resync', async (roomId) => {
-            if (!redisClient.isOpen) return;
-            const stateRaw = await redisClient.get(`room:${roomId}`);
+            if (!client.isOpen) return;
+            const stateRaw = await client.get(`room:${roomId}`);
             if (stateRaw) {
                 try {
                     socket.emit('map-update', JSON.parse(stateRaw));
@@ -225,44 +258,46 @@ async function startServer() {
             }
         });
 
-        // ROBUSTNESS FIX 3: Use 'disconnecting' so we can see which rooms the user is still in.
         socket.on('disconnecting', async () => {
             debug(`Disconnecting: ${socket.id}`);
             for (const roomId of socket.rooms) {
                 if (roomId === socket.id) continue;
-                await checkAndCleanupRoom(roomId, socket.id, true);
+                await checkAndCleanupRoom(roomId, socket.id, true, client);
             }
         });
     });
-
-    // Helper to evaluate room state and clean up Redis
-    async function checkAndCleanupRoom(roomId, socketId, isDisconnectingEvent = false) {
-        const room = io.sockets.adapter.rooms.get(roomId);
-
-        // If we are evaluating during a "disconnecting" event, the user is still technically in the adapter size.
-        // Therefore, if size is 1, they are the last person. Otherwise, 0 means it's empty.
-        const userCount = room ? room.size : 0;
-        const isEmpty = isDisconnectingEvent ? userCount <= 1 : userCount === 0;
-
-        if (isEmpty) {
-            debug(`Room ${roomId} is empty. Cleaning up state.`);
-            await redisClient.del(`room:${roomId}`);
-            await redisClient.del(`room:${roomId}:host`);
-            roomQueues.delete(roomId); // Prevent memory leak in queue map
-        } else {
-            // The room isn't empty, but let's check if the person leaving was the host
-            const hostKey = `room:${roomId}:host`;
-            const currentHostId = await redisClient.get(hostKey);
-
-            if (currentHostId === socketId) {
-                debug(`Host left room ${roomId}. Reassigning or waiting for new host.`);
-                io.to(roomId).emit('host-disconnected');
-                await redisClient.del(hostKey);
-            }
-        }
-    }
-
-    console.log('VTT Sync Server running on port 3003');
 }
 
-startServer();
+const shutdown = async () => {
+    return new Promise((resolve) => {
+        io.close(() => {
+            if (redisClient.isOpen) {
+                redisClient.quit().then(() => {
+                    server.close(() => {
+                        resolve();
+                    });
+                });
+            } else {
+                server.close(() => {
+                    resolve();
+                });
+            }
+        });
+    });
+};
+
+if (require.main === module) {
+    const PORT = process.env.PORT || 3003;
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`VTT Sync Server running on port ${PORT}`);
+    });
+    start();
+}
+
+module.exports = {
+    server,
+    io,
+    redisClient,
+    start,
+    shutdown
+};

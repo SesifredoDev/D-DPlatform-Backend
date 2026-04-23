@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [api-service, messaging-service]
+        service: [api-service, messaging-service, map-service]
 
     steps:
       - name: Checkout repository
