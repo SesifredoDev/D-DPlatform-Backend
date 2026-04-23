@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [api-service]
+        service: [api-service, messaging-service]
 
     steps:
       - name: Checkout repository
@@ -29,7 +29,7 @@ jobs:
           cache-dependency-path: './${{ matrix.service }}/package-lock.json'
 
       - name: Install dependencies
-        run: npm install  # Changed from npm ci to allow lockfile sync
+        run: npm install
         working-directory: ./${{ matrix.service }}
 
       - name: Run tests

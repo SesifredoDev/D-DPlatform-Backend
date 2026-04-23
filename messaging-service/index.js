@@ -25,17 +25,24 @@ const subscriber = redis.createClient({
     }
 });
 
-subscriber.on('error', (err) => console.error('Redis Error:', err));
+subscriber.on('error', (err) => {
+    // Only log if not in test environment
+    if (process.env.NODE_ENV !== 'test') {
+        console.error('Redis Error:', err);
+    }
+});
 
 // Map to store userId to socketId mapping
 const userSocketMap = new Map();
 
-async function start() {
+async function start(redisClient = subscriber) {
     try {
-        await subscriber.connect();
+        if (!redisClient.isOpen) {
+            await redisClient.connect();
+        }
         console.log('Connected to Redis Sub/Pub');
 
-        await subscriber.subscribe('CHAT_MESSAGES', (message) => {
+        await redisClient.subscribe('CHAT_MESSAGES', (message) => {
             try {
                 const payload = JSON.parse(message);
                 if (payload.type === 'NEW_MESSAGE') {
@@ -50,23 +57,15 @@ async function start() {
 
                         if (senderSocketId) {
                             io.to(senderSocketId).emit('new_message', data);
-                            console.log(`Whisper sent to sender ${authorId} (socket: ${senderSocketId})`);
-                        } else {
-                            console.warn(`Sender ${authorId} not found in userSocketMap for whisper.`);
                         }
-                        if (recipientSocketId && recipientSocketId !== senderSocketId) { // Avoid double emit if sender is recipient
+                        if (recipientSocketId && recipientSocketId !== senderSocketId) { 
                             io.to(recipientSocketId).emit('new_message', data);
-                            console.log(`Whisper sent to recipient ${recipientId} (socket: ${recipientSocketId})`);
-                        } else if (!recipientSocketId) {
-                            console.warn(`Recipient ${recipientId} not found in userSocketMap for whisper.`);
                         }
                     } else {
                         // Regular message, emit to the channel room
                         io.to(data.channelId).emit('new_message', data);
-                        console.log(`Regular message emitted to channel ${data.channelId}`);
                     }
                 } else if (payload.type === 'REACTION_UPDATE') {
-                    // Reaction updates should still go to the whole channel
                     io.to(payload.data.channelId).emit('reaction_update', payload.data);
                 }
             } catch (err) {
@@ -74,7 +73,7 @@ async function start() {
             }
         });
 
-        await subscriber.subscribe('SERVER_UPDATES', (message) => {
+        await redisClient.subscribe('SERVER_UPDATES', (message) => {
             try {
                 const payload = JSON.parse(message);
                 if (payload.type === 'MEMBER_UPDATE') {
@@ -87,64 +86,69 @@ async function start() {
             }
         });
     } catch (err) {
-        console.error("Redis connection failed, retrying in background...", err);
+        if (process.env.NODE_ENV !== 'test') {
+            console.error("Redis connection failed, retrying in background...", err);
+        }
     }
 }
 
 io.on('connection', (socket) => {
-    console.log("User connected to Messaging:", socket.id);
-
     // Retrieve userId from socket.handshake.auth (frontend needs to send this)
     const userId = socket.handshake.auth.userId;
     if (userId) {
-        userSocketMap.set(userId, socket.id);
-        console.log(`User ${userId} connected with socket ${socket.id}`);
+        userSocketMap.set(userId.toString(), socket.id);
 
         socket.on('disconnect', () => {
-            userSocketMap.delete(userId);
-            console.log(`User ${userId} disconnected from Messaging`);
+            userSocketMap.delete(userId.toString());
         });
-    } else {
-        console.warn(`Socket ${socket.id} connected without a userId in handshake.auth.`);
     }
 
     socket.on('join_channel', (channelId) => {
-        console.log(`Socket ${socket.id} joining channel ${channelId}`);
         socket.join(channelId);
     });
 
     socket.on('join_server', (serverId) => {
-        console.log(`Socket ${socket.id} joining server room server:${serverId}`);
         socket.join(`server:${serverId}`);
     });
-
-    socket.on('disconnect', () => {
-        // The userSocketMap.delete(userId) is handled in the specific userId block
-        console.log("User disconnected from Messaging (general handler)");
-    });
 });
-
-server.listen(3001, '0.0.0.0', () => {
-    console.log('Messaging Service listening on port 3001');
-});
-
-start();
 
 const shutdown = async (signal) => {
-    console.log(`Received ${signal}. Shutting down...`);
+    if (process.env.NODE_ENV !== 'test') {
+        console.log(`Received ${signal}. Shutting down...`);
+    }
     try {
         io.close();
         if (subscriber.isOpen) await subscriber.quit();
-        server.close(() => {
-            console.log("HTTP server closed.");
-            process.exit(0);
+        return new Promise((resolve) => {
+            server.close(() => {
+                if (process.env.NODE_ENV !== 'test') {
+                    console.log("HTTP server closed.");
+                }
+                resolve();
+                if (require.main === module) process.exit(0);
+            });
+            if (require.main === module) setTimeout(() => process.exit(1), 5000);
         });
-        setTimeout(() => process.exit(1), 5000);
     } catch (err) {
         console.error("Error during shutdown:", err);
-        process.exit(1);
+        if (require.main === module) process.exit(1);
     }
 };
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+if (require.main === module) {
+    server.listen(3001, '0.0.0.0', () => {
+        console.log('Messaging Service listening on port 3001');
+    });
+    start();
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
+module.exports = {
+    server,
+    io,
+    subscriber,
+    start,
+    shutdown,
+    userSocketMap
+};

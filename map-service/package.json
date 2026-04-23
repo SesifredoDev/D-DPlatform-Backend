@@ -16,6 +16,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "jest": "^30.3.0",
     "redis": "^4.6.10",
     "socket.io": "^4.7.2"
   },
