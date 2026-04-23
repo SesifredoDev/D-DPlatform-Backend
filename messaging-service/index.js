@@ -12,7 +12,7 @@ const io = new Server(server, {
     transports: ['websocket', 'polling']
 });
 
-const subscriber = redis.createClient({ 
+const subscriber = redis.createClient({
     url: process.env.REDIS_URL || 'redis://redis:6379',
     socket: {
         reconnectStrategy: (retries) => {
@@ -27,6 +27,9 @@ const subscriber = redis.createClient({
 
 subscriber.on('error', (err) => console.error('Redis Error:', err));
 
+// Map to store userId to socketId mapping
+const userSocketMap = new Map();
+
 async function start() {
     try {
         await subscriber.connect();
@@ -37,8 +40,33 @@ async function start() {
                 const payload = JSON.parse(message);
                 if (payload.type === 'NEW_MESSAGE') {
                     const data = payload.data;
-                    io.to(data.channelId).emit('new_message', data);
+                    const authorId = data.author?._id || data.author;
+                    const recipientId = data.recipient?._id || data.recipient;
+
+                    if (data.isWhisper && recipientId && authorId) {
+                        // It's a whisper, emit only to sender and recipient
+                        const senderSocketId = userSocketMap.get(authorId.toString());
+                        const recipientSocketId = userSocketMap.get(recipientId.toString());
+
+                        if (senderSocketId) {
+                            io.to(senderSocketId).emit('new_message', data);
+                            console.log(`Whisper sent to sender ${authorId} (socket: ${senderSocketId})`);
+                        } else {
+                            console.warn(`Sender ${authorId} not found in userSocketMap for whisper.`);
+                        }
+                        if (recipientSocketId && recipientSocketId !== senderSocketId) { // Avoid double emit if sender is recipient
+                            io.to(recipientSocketId).emit('new_message', data);
+                            console.log(`Whisper sent to recipient ${recipientId} (socket: ${recipientSocketId})`);
+                        } else if (!recipientSocketId) {
+                            console.warn(`Recipient ${recipientId} not found in userSocketMap for whisper.`);
+                        }
+                    } else {
+                        // Regular message, emit to the channel room
+                        io.to(data.channelId).emit('new_message', data);
+                        console.log(`Regular message emitted to channel ${data.channelId}`);
+                    }
                 } else if (payload.type === 'REACTION_UPDATE') {
+                    // Reaction updates should still go to the whole channel
                     io.to(payload.data.channelId).emit('reaction_update', payload.data);
                 }
             } catch (err) {
@@ -66,6 +94,20 @@ async function start() {
 io.on('connection', (socket) => {
     console.log("User connected to Messaging:", socket.id);
 
+    // Retrieve userId from socket.handshake.auth (frontend needs to send this)
+    const userId = socket.handshake.auth.userId;
+    if (userId) {
+        userSocketMap.set(userId, socket.id);
+        console.log(`User ${userId} connected with socket ${socket.id}`);
+
+        socket.on('disconnect', () => {
+            userSocketMap.delete(userId);
+            console.log(`User ${userId} disconnected from Messaging`);
+        });
+    } else {
+        console.warn(`Socket ${socket.id} connected without a userId in handshake.auth.`);
+    }
+
     socket.on('join_channel', (channelId) => {
         console.log(`Socket ${socket.id} joining channel ${channelId}`);
         socket.join(channelId);
@@ -76,7 +118,10 @@ io.on('connection', (socket) => {
         socket.join(`server:${serverId}`);
     });
 
-    socket.on('disconnect', () => console.log("User disconnected from Messaging"));
+    socket.on('disconnect', () => {
+        // The userSocketMap.delete(userId) is handled in the specific userId block
+        console.log("User disconnected from Messaging (general handler)");
+    });
 });
 
 server.listen(3001, '0.0.0.0', () => {

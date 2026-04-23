@@ -227,19 +227,31 @@ exports.getMessages = async (req, res) => {
         if (!canRead)
             return res.status(403).json({ message: "Access denied" });
 
-        // Build query to filter whispers
-        const query = { 
-            channel: channelId,
-            $or: [
-                { isWhisper: { $ne: true } }, // Regular messages
-                { author: userId }, // Whispers I sent
-                { recipient: userId } // Whispers sent to me
-            ]
-        };
+        let query;
+        if (channel.type === 'whisper') {
+            const isServerOwner = server.owner.toString() === userId;
+            const isChannelRecipient = channel.recipient?.toString() === userId;
 
-        if (server.owner.toString() === userId) {
-            delete query.$or;
-            query.channel = channelId;
+            if (!isServerOwner && !isChannelRecipient) {
+                return res.status(403).json({ message: "Access denied" });
+            }
+
+            // Whisper channels are already private to the owner and one recipient,
+            // so history should be scoped by channel rather than per-message recipient metadata.
+            query = { channel: channelId };
+        } else {
+            query = {
+                channel: channelId,
+                $or: [
+                    { isWhisper: { $ne: true } },
+                    { author: userId },
+                    { recipient: userId }
+                ]
+            };
+
+            if (server.owner.toString() === userId) {
+                delete query.$or;
+            }
         }
 
         const messages = await Message.find(query)
