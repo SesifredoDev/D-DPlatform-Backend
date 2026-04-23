@@ -1,6 +1,7 @@
 const serverController = require('../../controllers/server.controller');
 const Server = require('../../models/Server');
 const Role = require('../../models/Roles');
+const Character = require('../../models/Character');
 const { hasPermission } = require('../../utils/permissions');
 
 jest.mock('../../models/Server');
@@ -21,6 +22,25 @@ jest.mock('redis', () => ({
 describe('Server Controller', () => {
     let req, res;
 
+    // Helper to mock Mongoose query chain
+    const mockQuery = (val) => {
+        const query = {
+            populate: jest.fn().mockReturnThis(),
+            lean: jest.fn().mockReturnThis(),
+            sort: jest.fn().mockReturnThis(),
+            select: jest.fn().mockReturnThis(),
+            exec: jest.fn().mockResolvedValue(val),
+            // Make it thenable so 'await' works directly on the query object
+            then: jest.fn((resolve, reject) => {
+                return Promise.resolve(val).then(resolve, reject);
+            }),
+            catch: jest.fn((reject) => {
+                return Promise.resolve(val).catch(reject);
+            })
+        };
+        return query;
+    };
+
     beforeEach(() => {
         req = {
             user: { id: 'user123' },
@@ -34,6 +54,14 @@ describe('Server Controller', () => {
             json: jest.fn().mockReturnThis()
         };
         jest.clearAllMocks();
+
+        // Default chainable mocks to prevent "Cannot read properties of undefined (reading 'populate')"
+        Server.findById.mockReturnValue(mockQuery(null));
+        Server.findOne.mockReturnValue(mockQuery(null));
+        Server.find.mockReturnValue(mockQuery([]));
+        Character.find.mockReturnValue(mockQuery([]));
+        Role.find.mockReturnValue(mockQuery([]));
+        Role.findOne.mockReturnValue(mockQuery(null));
     });
 
     describe('createServer', () => {
@@ -65,8 +93,14 @@ describe('Server Controller', () => {
                 save: jest.fn().mockResolvedValue()
             };
             req.body = { code: 'code123' };
-            Server.findOne.mockResolvedValue(mockServer);
-            Role.findOne.mockResolvedValue({ _id: 'everyoneRole' });
+            Server.findOne.mockReturnValue(mockQuery(mockServer));
+            Role.findOne.mockReturnValue(mockQuery({ _id: 'everyoneRole' }));
+            
+            // Mock notifyMemberUpdate's database calls
+            Server.findById.mockReturnValue(mockQuery({
+                ...mockServer,
+                members: [{ user: { _id: 'user123', username: 'testuser' }, roles: [] }]
+            }));
 
             await serverController.joinServer(req, res);
 
@@ -76,7 +110,7 @@ describe('Server Controller', () => {
 
         it('should return 404 for invalid code', async () => {
             req.body = { code: 'wrong' };
-            Server.findOne.mockResolvedValue(null);
+            Server.findOne.mockReturnValue(mockQuery(null));
 
             await serverController.joinServer(req, res);
 
@@ -91,7 +125,7 @@ describe('Server Controller', () => {
                 owner: 'user123',
                 deleteOne: jest.fn().mockResolvedValue()
             };
-            Server.findById.mockResolvedValue(mockServer);
+            Server.findById.mockReturnValue(mockQuery(mockServer));
 
             await serverController.deleteServer(req, res);
 
@@ -104,7 +138,7 @@ describe('Server Controller', () => {
                 _id: 'server123',
                 owner: 'otherUser'
             };
-            Server.findById.mockResolvedValue(mockServer);
+            Server.findById.mockReturnValue(mockQuery(mockServer));
 
             await serverController.deleteServer(req, res);
 
