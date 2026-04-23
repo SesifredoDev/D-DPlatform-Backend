@@ -21,6 +21,11 @@ describe('S3 Service', () => {
 
     beforeEach(() => {
         jest.clearAllMocks();
+        jest.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        console.log.mockRestore();
     });
 
     describe('uploadToS3', () => {
@@ -48,8 +53,8 @@ describe('S3 Service', () => {
             expect(result).toEqual({
                 id: 'mock-uuid',
                 key: `mock-uuid-${mockFilename}`,
-                filename: mockFilename,
                 contentType: mockContentType,
+                filename: mockFilename,
             });
         });
     });

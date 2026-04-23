@@ -19,6 +19,11 @@ describe('User Controller', () => {
             json: jest.fn().mockReturnThis(),
             sendStatus: jest.fn().mockReturnThis()
         };
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        console.warn.mockRestore();
     });
 
     describe('getMe', () => {

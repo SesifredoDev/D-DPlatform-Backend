@@ -15,6 +15,13 @@ describe('DDB Controller', () => {
             json: jest.fn().mockReturnThis()
         };
         jest.clearAllMocks();
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+        jest.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        console.warn.mockRestore();
+        console.log.mockRestore();
     });
 
     describe('getCharacter', () => {

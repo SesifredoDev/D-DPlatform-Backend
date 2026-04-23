@@ -26,6 +26,11 @@ describe('Files Controller', () => {
             set: jest.fn().mockReturnThis()
         };
         jest.clearAllMocks();
+        jest.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        console.log.mockRestore();
     });
 
     describe('getFile', () => {
