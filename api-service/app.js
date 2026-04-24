@@ -17,7 +17,8 @@ const app = express();
 
 const allowedOrigins = [
     'https://d-d-platform.vercel.app',
-    'http://localhost:4200'
+    'http://localhost:4200',
+    'http://100.69.189.80:4200'
 ];
 
 app.use(
