@@ -27,6 +27,24 @@ function getFileFullUrl(req, key) {
     return `${req.protocol}://${req.get('host')}/api/files/${key}`;
 }
 
+function buildAttachmentKey(attachment) {
+    if (!attachment) return null;
+
+    if (attachment.key) {
+        return attachment.key;
+    }
+
+    if (attachment.id && attachment.filename) {
+        return `${attachment.id}-${attachment.filename}`;
+    }
+
+    if (attachment.id && attachment.name) {
+        return `${attachment.id}-${attachment.name}`;
+    }
+
+    return attachment.id || null;
+}
+
 function extractFilenameFromUrl(url) {
     if (!url) return null;
 
@@ -44,12 +62,17 @@ function extractFilenameFromUrl(url) {
 function normalizeAttachment(req, attachment) {
     if (!attachment) return null;
 
-    const url = attachment.url || getFileFullUrl(req, attachment.key || attachment.id);
+    const filename = attachment.filename || attachment.name || extractFilenameFromUrl(attachment.url) || 'attachment';
+    const fileKey = buildAttachmentKey({ ...attachment, filename });
+    const normalizedUrl = attachment.url && attachment.id && attachment.filename
+        ? attachment.url.replace(new RegExp(`${attachment.id}$`), fileKey)
+        : attachment.url;
+    const url = normalizedUrl || getFileFullUrl(req, fileKey);
     if (!url) return null;
 
-    const filename = attachment.filename || attachment.name || extractFilenameFromUrl(url) || 'attachment';
-
     return {
+        id: attachment.id || null,
+        key: fileKey,
         url,
         name: attachment.name || filename,
         filename,
