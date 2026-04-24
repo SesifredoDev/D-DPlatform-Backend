@@ -482,7 +482,7 @@ exports.getServerDetails = async (req, res) => {
         const server = await Server.findById(serverId)
             .populate({
                 path: 'members.user',
-                select: 'username email profileIcon'
+                select: 'username profileIcon'
             })
             .populate({
                 path: 'members.roles',
