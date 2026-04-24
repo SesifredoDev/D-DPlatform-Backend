@@ -27,6 +27,28 @@ function getFileFullUrl(req, key) {
     return `${req.protocol}://${req.get('host')}/api/files/${key}`;
 }
 
+function replaceTrailingAttachmentId(url, attachmentId, fileKey) {
+    if (!url || !attachmentId || !fileKey) return url;
+
+    try {
+        const parsedUrl = new URL(url, 'http://localhost');
+        const segments = (parsedUrl.pathname || '').split('/').filter(Boolean);
+        if (segments[segments.length - 1] === attachmentId) {
+            segments[segments.length - 1] = fileKey;
+            parsedUrl.pathname = `/${segments.join('/')}`;
+            return parsedUrl.origin === 'http://localhost'
+                ? `${parsedUrl.pathname}${parsedUrl.search}`
+                : `${parsedUrl.toString()}`;
+        }
+    } catch {
+        if (url.endsWith(`/${attachmentId}`)) {
+            return `${url.slice(0, -attachmentId.length)}${fileKey}`;
+        }
+    }
+
+    return url;
+}
+
 function buildAttachmentKey(attachment) {
     if (!attachment) return null;
 
@@ -64,9 +86,7 @@ function normalizeAttachment(req, attachment) {
 
     const filename = attachment.filename || attachment.name || extractFilenameFromUrl(attachment.url) || 'attachment';
     const fileKey = buildAttachmentKey({ ...attachment, filename });
-    const normalizedUrl = attachment.url && attachment.id && attachment.filename
-        ? attachment.url.replace(new RegExp(`${attachment.id}$`), fileKey)
-        : attachment.url;
+    const normalizedUrl = replaceTrailingAttachmentId(attachment.url, attachment.id, fileKey);
     const url = normalizedUrl || getFileFullUrl(req, fileKey);
     if (!url) return null;
 
