@@ -41,7 +41,7 @@ services:
     ports:
       - "7880:7880"
       - "7881:7881"
-      - "40000-40050:40000-40050/udp"
+      - "40000-42000:40000-42000/udp"
     networks:
       - d-platform-network
 
@@ -67,3 +67,4 @@ services:
 networks:
   d-platform-network:
     driver: bridge
+

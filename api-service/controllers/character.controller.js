@@ -25,15 +25,29 @@ publisher.connect().catch(err => console.error('Redis Publisher initial connect 
 function getFileFullUrl(req, key) {
     if (!key) return null;
     if (key.startsWith('http')) return key;
+    if (key.startsWith('/api/files/')) {
+        return `${req.protocol}://${req.get('host')}${key}`;
+    }
     return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function normalizeStoredFileValue(value) {
+    if (!value || typeof value !== 'string') return value;
+    return s3Service.normalizeStoredFileValue(value);
 }
 
 function processCharacterUrls(req, character) {
     if (character.icon) {
-        character.iconUrl = getFileFullUrl(req, character.icon);
+        const storedIcon = normalizeStoredFileValue(character.icon);
+        character.iconKey = storedIcon;
+        character.icon = getFileFullUrl(req, storedIcon);
+        character.iconUrl = getFileFullUrl(req, storedIcon);
     }
     if (character.pdfLink) {
-        character.pdfLinkUrl = getFileFullUrl(req, character.pdfLink);
+        const storedPdf = normalizeStoredFileValue(character.pdfLink);
+        character.pdfKey = storedPdf;
+        character.pdfLink = getFileFullUrl(req, storedPdf);
+        character.pdfLinkUrl = getFileFullUrl(req, storedPdf);
     }
 }
 
@@ -54,7 +68,7 @@ async function notifyCharacterUpdate(req, serverId, character) {
     }
 }
 
-async function handleFileUpload(file, req) {
+async function handleFileUpload(file) {
     let fileBuffer = file.buffer;
     let contentType = file.mimetype;
     let filename = file.originalname;
@@ -86,15 +100,15 @@ exports.createCharacter = async (req, res) => {
     try {
         const charData = req.body;
         const userId = req.user.id;
-        let iconKey = charData.icon;
-        let pdfKey = charData.pdfLink;
+        let iconKey = normalizeStoredFileValue(charData.icon);
+        let pdfKey = normalizeStoredFileValue(charData.pdfLink);
 
         if (req.files) {
             if (req.files.icon) {
-                iconKey = await handleFileUpload(req.files.icon[0], req);
+                iconKey = await handleFileUpload(req.files.icon[0]);
             }
             if (req.files.pdf) {
-                pdfKey = await handleFileUpload(req.files.pdf[0], req);
+                pdfKey = await handleFileUpload(req.files.pdf[0]);
             }
         }
 
@@ -107,8 +121,9 @@ exports.createCharacter = async (req, res) => {
             ownerId: userId,
             name: charData.name,
             race: charData.race,
-            icon: iconKey,
+            icon: iconKey || null,
             ddbId: charData.ddbId || null,
+            ddbUsername: charData.ddbUsername || null,
             pdfLink: pdfKey || null,
             baseStats: typeof charData.baseStats === 'string'
                 ? JSON.parse(charData.baseStats) : charData.baseStats,
@@ -154,7 +169,7 @@ exports.updateCharacter = async (req, res) => {
             return res.status(404).json({ message: "Character not found or unauthorized." });
         }
 
-        const fields = ['name', 'race', 'ddbId', "ddbUsername", 'ac'];
+        const fields = ['name', 'race', 'ddbId', 'ddbUsername', 'ac'];
         fields.forEach(field => {
             if (charData[field] !== undefined) updateFields[field] = charData[field];
         });
@@ -166,6 +181,12 @@ exports.updateCharacter = async (req, res) => {
         if (charData.classes) {
             updateFields.classes = typeof charData.classes === 'string'
                 ? JSON.parse(charData.classes) : charData.classes;
+        }
+        if (charData.icon !== undefined) {
+            updateFields.icon = normalizeStoredFileValue(charData.icon) || null;
+        }
+        if (charData.pdfLink !== undefined) {
+            updateFields.pdfLink = normalizeStoredFileValue(charData.pdfLink) || null;
         }
         
         let serversChanged = false;
@@ -180,10 +201,10 @@ exports.updateCharacter = async (req, res) => {
 
         if (req.files) {
             if (req.files.icon) {
-                updateFields.icon = await handleFileUpload(req.files.icon[0], req);
+                updateFields.icon = await handleFileUpload(req.files.icon[0]);
             }
             if (req.files.pdf) {
-                updateFields.pdfLink = await handleFileUpload(req.files.pdf[0], req);
+                updateFields.pdfLink = await handleFileUpload(req.files.pdf[0]);
             }
         }
 
@@ -200,14 +221,12 @@ exports.updateCharacter = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        // Notify current servers
         if (updatedCharacter.servers && updatedCharacter.servers.length > 0) {
             for (const serverId of updatedCharacter.servers) {
                 await notifyCharacterUpdate(req, serverId, updatedCharacter);
             }
         }
 
-        // Notify removed servers
         if (serversChanged) {
             const newServerIds = updatedCharacter.servers.map(s => s.toString());
             for (const oldServerId of oldServers) {

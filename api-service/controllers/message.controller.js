@@ -27,6 +27,46 @@ function getFileFullUrl(req, key) {
     return `${req.protocol}://${req.get('host')}/api/files/${key}`;
 }
 
+function extractFilenameFromUrl(url) {
+    if (!url) return null;
+
+    try {
+        const parsedUrl = new URL(url, 'http://localhost');
+        const pathname = parsedUrl.pathname || '';
+        const lastSegment = pathname.split('/').filter(Boolean).pop();
+        return lastSegment || null;
+    } catch {
+        const lastSegment = url.split('/').filter(Boolean).pop();
+        return lastSegment || null;
+    }
+}
+
+function normalizeAttachment(req, attachment) {
+    if (!attachment) return null;
+
+    const url = attachment.url || getFileFullUrl(req, attachment.key || attachment.id);
+    if (!url) return null;
+
+    const filename = attachment.filename || attachment.name || extractFilenameFromUrl(url) || 'attachment';
+
+    return {
+        url,
+        name: attachment.name || filename,
+        filename,
+        contentType: attachment.contentType || 'application/octet-stream'
+    };
+}
+
+function normalizeAttachments(req, attachments) {
+    if (!Array.isArray(attachments)) {
+        return [];
+    }
+
+    return attachments
+        .map(attachment => normalizeAttachment(req, attachment))
+        .filter(Boolean);
+}
+
 function processIconUrls(req, message) {
     if (message.author && message.author.profileIcon) {
         message.author.profileIconUrl = getFileFullUrl(req, message.author.profileIcon);
@@ -45,6 +85,25 @@ function processIconUrls(req, message) {
             message.replyTo.character.iconUrl = getFileFullUrl(req, message.replyTo.character.icon);
         }
     }
+}
+
+function normalizeMessagePayload(req, message) {
+    const payload = typeof message.toObject === 'function' ? message.toObject() : { ...message };
+    const channelId = String(payload.channelId || payload.channel);
+
+    payload.channel = channelId;
+    payload.channelId = channelId;
+    payload.server = String(payload.server);
+    payload.attachments = normalizeAttachments(req, payload.attachments);
+    payload.reactions = Array.isArray(payload.reactions) ? payload.reactions : [];
+
+    processIconUrls(req, payload);
+
+    if (payload.replyTo && payload.replyTo.attachments) {
+        payload.replyTo.attachments = normalizeAttachments(req, payload.replyTo.attachments);
+    }
+
+    return payload;
 }
 
 /* ===== PERMISSIONS ===== */
@@ -99,15 +158,21 @@ exports.sendMessage = async (req, res) => {
             if (!character) return res.status(403).json({ message: "Invalid character" });
         }
 
+        const normalizedAttachments = normalizeAttachments(req, attachments);
+        const normalizedContent = typeof content === 'string' ? content : '';
+        if (!normalizedContent.trim() && normalizedAttachments.length === 0) {
+            return res.status(400).json({ message: "Message content or attachments are required" });
+        }
+
         const messageData = {
             channel: channelId,
             server: channel.server,
             author: userId,
             character: characterId || null,
-            content,
-            attachments: attachments || [],
+            content: normalizedContent,
+            attachments: normalizedAttachments,
             replyTo: replyTo || null,
-            isWhisper: isWhisper || false,
+            isWhisper: Boolean(isWhisper),
             recipient: recipientId || null
         };
 
@@ -126,9 +191,7 @@ exports.sendMessage = async (req, res) => {
             { path: "recipient", select: "username avatar profileIcon" }
         ]);
 
-        const payload = message.toObject();
-        payload.channelId = channelId;
-        processIconUrls(req, payload);
+        const payload = normalizeMessagePayload(req, message);
 
         if (publisher.isOpen) {
             await publisher.publish('CHAT_MESSAGES', JSON.stringify({ type: 'NEW_MESSAGE', data: payload }));
@@ -165,7 +228,7 @@ exports.addReaction = async (req, res) => {
         if (publisher.isOpen) {
             await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
                 type: 'REACTION_UPDATE', 
-                data: { messageId, reactions: message.reactions, channelId: message.channel } 
+                data: { messageId, reactions: message.reactions, channelId: String(message.channel) } 
             }));
         }
 
@@ -196,7 +259,7 @@ exports.removeReaction = async (req, res) => {
         if (publisher.isOpen) {
             await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
                 type: 'REACTION_UPDATE', 
-                data: { messageId, reactions: message.reactions, channelId: message.channel } 
+                data: { messageId, reactions: message.reactions, channelId: String(message.channel) } 
             }));
         }
 
@@ -236,8 +299,6 @@ exports.getMessages = async (req, res) => {
                 return res.status(403).json({ message: "Access denied" });
             }
 
-            // Whisper channels are already private to the owner and one recipient,
-            // so history should be scoped by channel rather than per-message recipient metadata.
             query = { channel: channelId };
         } else {
             query = {
@@ -269,9 +330,7 @@ exports.getMessages = async (req, res) => {
             })
             .lean();
 
-        messages.forEach(msg => processIconUrls(req, msg));
-
-        res.json(messages);
+        res.json(messages.map(message => normalizeMessagePayload(req, message)));
     } catch (err) {
         res.status(500).json({ message: "Internal server error" });
     }

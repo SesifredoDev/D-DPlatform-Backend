@@ -30,19 +30,40 @@ publisher.connect().catch(err => console.error('Redis Publisher initial connect 
 function getFileFullUrl(req, key) {
     if (!key) return null;
     if (key.startsWith('http')) return key;
+    if (key.startsWith('/api/files/')) {
+        return `${req.protocol}://${req.get('host')}${key}`;
+    }
     return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function normalizeStoredFileValue(value) {
+    if (!value || typeof value !== 'string') return value;
+    return s3Service.normalizeStoredFileValue(value);
+}
+
+function toServerResponse(req, server) {
+    const serverObj = typeof server.toObject === 'function' ? server.toObject() : { ...server };
+    const storedIcon = normalizeStoredFileValue(serverObj.icon);
+
+    return {
+        ...serverObj,
+        icon: getFileFullUrl(req, storedIcon),
+        iconKey: storedIcon,
+        iconUrl: getFileFullUrl(req, storedIcon)
+    };
 }
 
 function processUserIcon(req, user) {
     if (user && user.profileIcon) {
-        user.profileIconUrl = getFileFullUrl(req, user.profileIcon);
+        const storedIcon = normalizeStoredFileValue(user.profileIcon);
+        user.profileIcon = getFileFullUrl(req, storedIcon);
+        user.profileIconUrl = getFileFullUrl(req, storedIcon);
     }
 }
 
 async function notifyMemberUpdate(req, serverId) {
     if (!publisher.isOpen) return;
     
-    // Fetch fresh server details to send to clients
     try {
         const server = await Server.findById(serverId)
             .populate({
@@ -62,7 +83,11 @@ async function notifyMemberUpdate(req, serverId) {
                  const ownerId = char.ownerId.toString();
                  if (!charactersByOwner[ownerId]) charactersByOwner[ownerId] = [];
                  charactersByOwner[ownerId].push(char);
-                 if (char.icon) char.iconUrl = getFileFullUrl(req, char.icon);
+                 if (char.icon) {
+                     const storedIcon = normalizeStoredFileValue(char.icon);
+                     char.icon = getFileFullUrl(req, storedIcon);
+                     char.iconUrl = getFileFullUrl(req, storedIcon);
+                 }
              }
 
              const members = server.members.map(member => {
@@ -88,7 +113,7 @@ function generateJoinCode() {
     return crypto.randomBytes(4).toString("hex");
 }
 
-async function handleIconUpload(file, req) {
+async function handleIconUpload(file) {
     let fileBuffer = file.buffer;
     let contentType = file.mimetype;
     let filename = file.originalname;
@@ -113,7 +138,7 @@ async function handleIconUpload(file, req) {
     }
 
     const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
-    return uploadedAsset.key; // Return only the key
+    return uploadedAsset.key;
 }
 
 /**
@@ -122,10 +147,10 @@ async function handleIconUpload(file, req) {
 exports.createServer = async (req, res) => {
     const userId = req.user.id;
     const { name, icon } = req.body;
-    let iconKey = icon;
+    let iconKey = normalizeStoredFileValue(icon);
 
     if (req.files && req.files.icon) {
-        iconKey = await handleIconUpload(req.files.icon[0], req);
+        iconKey = await handleIconUpload(req.files.icon[0]);
     }
 
     const server = await Server.create({
@@ -154,10 +179,7 @@ exports.createServer = async (req, res) => {
 
     await server.save();
     
-    const serverObj = server.toObject();
-    serverObj.iconUrl = getFileFullUrl(req, serverObj.icon);
-    
-    res.status(201).json(serverObj);
+    res.status(201).json(toServerResponse(req, server));
 };
 
 /**
@@ -345,19 +367,16 @@ exports.updateServer = async (req, res) => {
     }
 
     if (req.files && req.files.icon) {
-        server.icon = await handleIconUpload(req.files.icon[0], req);
+        server.icon = await handleIconUpload(req.files.icon[0]);
     } else if (icon !== undefined) {
-        server.icon = icon;
+        server.icon = normalizeStoredFileValue(icon);
     }
 
     if (name) server.name = name;
 
     await server.save();
     
-    const serverObj = server.toObject();
-    serverObj.iconUrl = getFileFullUrl(req, serverObj.icon);
-    
-    res.json(serverObj);
+    res.json(toServerResponse(req, server));
 };
 
 exports.updateMemberRoles = async (req, res) => {
@@ -432,11 +451,13 @@ exports.getUserServers= async (req, res) => {
     }).lean();
 
     const result = servers.map(server => {
+        const response = toServerResponse(req, server);
         return {
-            _id: server._id,
-            name: server.name,
-            icon: server.icon,
-            iconUrl: getFileFullUrl(req, server.icon)
+            _id: response._id,
+            name: response.name,
+            icon: response.icon,
+            iconKey: response.iconKey,
+            iconUrl: response.iconUrl
         };
     });
 
@@ -521,13 +542,14 @@ exports.getServerDetails = async (req, res) => {
             }
             
             if (char.icon) {
-                char.iconUrl = getFileFullUrl(req, char.icon);
+                const storedIcon = normalizeStoredFileValue(char.icon);
+                char.icon = getFileFullUrl(req, storedIcon);
+                char.iconUrl = getFileFullUrl(req, storedIcon);
             }
 
             charactersByOwner[ownerId].push(char);
         }
 
-        // Attach characters to members
         server.members = server.members.map(member => {
             processUserIcon(req, member.user);
             return {
@@ -536,9 +558,7 @@ exports.getServerDetails = async (req, res) => {
             }
         });
 
-        if (server.icon) {
-            server.iconUrl = getFileFullUrl(req, server.icon);
-        }
+        const responseServer = toServerResponse(req, server);
 
         const allChannels = await Channel.find({ server: serverId }).sort({ position: 1 });
 
@@ -560,7 +580,7 @@ exports.getServerDetails = async (req, res) => {
         }
 
         res.json({
-            ...server,
+            ...responseServer,
             channels: visibleChannels
         });
 
