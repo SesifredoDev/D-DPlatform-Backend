@@ -1,7 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const RefreshToken = require('../models/RefreshToken');
 const {
@@ -11,6 +10,17 @@ const {
 } = require('../services/token.service');
 
 const router = express.Router();
+
+function getRefreshCookieOptions() {
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    return {
+        httpOnly: true,
+        sameSite: isProduction ? 'none' : 'lax',
+        secure: isProduction,
+        path: '/',
+    };
+}
 
 /**
  * REGISTER
@@ -55,12 +65,8 @@ router.post('/login', async (req, res) => {
         const refreshToken = await createRefreshToken(user._id);
 
         res
-            .cookie('refreshToken', refreshToken, {
-                httpOnly: true,
-                sameSite: 'lax',
-                secure: false, // Set to true in production with HTTPS
-            })
-            .json({ accessToken }); // Don't send refreshToken in body if using cookies
+            .cookie('refreshToken', refreshToken, getRefreshCookieOptions())
+            .json({ accessToken });
     } catch (error) {
         console.error('Login Error:', error);
         res.status(500).json({ message: 'Internal server error' });
@@ -83,7 +89,7 @@ router.post('/refresh', async (req, res) => {
             if (stored) {
                 await RefreshToken.deleteOne({ tokenHash: oldHash });
             }
-            return res.status(403).json({ message: "Refresh Token Aged Out" });
+            return res.status(403).json({ message: 'Refresh Token Aged Out' });
         }
 
         const newRefreshToken = await rotateRefreshToken(
@@ -94,11 +100,7 @@ router.post('/refresh', async (req, res) => {
         const accessToken = generateAccessToken(stored.user);
 
         res
-            .cookie('refreshToken', newRefreshToken, {
-                httpOnly: true,
-                sameSite: 'lax',
-                secure: false, // Set to true in production with HTTPS
-            })
+            .cookie('refreshToken', newRefreshToken, getRefreshCookieOptions())
             .json({ accessToken });
     } catch (error) {
         console.error('Refresh Error:', error);
@@ -118,7 +120,7 @@ router.post('/logout', async (req, res) => {
             await RefreshToken.deleteOne({ tokenHash: hash });
         }
 
-        res.clearCookie('refreshToken').sendStatus(204);
+        res.clearCookie('refreshToken', getRefreshCookieOptions()).sendStatus(204);
     } catch (error) {
         console.error('Logout Error:', error);
         res.status(500).json({ message: 'Internal server error' });
