@@ -2,6 +2,16 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const RefreshToken = require('../models/RefreshToken');
 
+function getRefreshTokenTtlMs() {
+    const ttlDays = Number(process.env.REFRESH_TOKEN_TTL_DAYS);
+
+    if (!Number.isFinite(ttlDays) || ttlDays <= 0) {
+        throw new Error('REFRESH_TOKEN_TTL_DAYS must be a positive number');
+    }
+
+    return ttlDays * 24 * 60 * 60 * 1000;
+}
+
 function generateAccessToken(user) {
     return jwt.sign(
         {
@@ -10,7 +20,7 @@ function generateAccessToken(user) {
             username: user.username,
         },
         process.env.JWT_ACCESS_SECRET,
-        { expiresIn: process.env.ACCESS_TOKEN_EXPIRY } // 30 minutes
+        { expiresIn: process.env.ACCESS_TOKEN_EXPIRY }
     );
 }
 async function createRefreshToken(userId) {
@@ -20,9 +30,7 @@ async function createRefreshToken(userId) {
     await RefreshToken.create({
         user: userId,
         tokenHash: hash,
-        expiresAt: new Date(
-            Date.now() + process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000
-        ),
+        expiresAt: new Date(Date.now() + getRefreshTokenTtlMs()),
     });
 
     return token;
@@ -45,9 +53,7 @@ async function rotateRefreshToken(oldToken, userId) {
     await RefreshToken.create({
         user: userId,
         tokenHash: newHash,
-        expiresAt: new Date(
-            Date.now() + process.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000
-        ),
+        expiresAt: new Date(Date.now() + getRefreshTokenTtlMs()),
     });
 
     return newToken;
@@ -57,5 +63,6 @@ module.exports = {
     generateAccessToken,
     generateRefreshToken,
     createRefreshToken,
+    getRefreshTokenTtlMs,
     rotateRefreshToken,
 };

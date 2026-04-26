@@ -130,19 +130,33 @@ function processIconUrls(req, message) {
     }
 }
 
-function normalizeMessagePayload(req, message) {
+function normalizeMessagePayload(req, message, options = {}) {
     const payload = typeof message.toObject === 'function' ? message.toObject() : { ...message };
-    const channelId = String(payload.channelId || payload.channel);
+    const resolvedChannelId = payload.channelId ?? payload.channel ?? options.channelId;
 
-    payload.channel = channelId;
-    payload.channelId = channelId;
-    payload.server = String(payload.server);
-    payload.attachments = normalizeAttachments(req, payload.attachments);
-    payload.reactions = Array.isArray(payload.reactions) ? payload.reactions : [];
+    if (resolvedChannelId != null) {
+        payload.channelId = String(resolvedChannelId);
+    }
+
+    if (payload.channel != null) {
+        payload.channel = String(payload.channel);
+    }
+
+    if (payload.server != null) {
+        payload.server = String(payload.server);
+    }
+
+    if (Array.isArray(payload.attachments)) {
+        payload.attachments = normalizeAttachments(req, payload.attachments);
+    }
+
+    if (Array.isArray(payload.reactions)) {
+        payload.reactions = payload.reactions;
+    }
 
     processIconUrls(req, payload);
 
-    if (payload.replyTo && payload.replyTo.attachments) {
+    if (payload.replyTo && Array.isArray(payload.replyTo.attachments)) {
         payload.replyTo.attachments = normalizeAttachments(req, payload.replyTo.attachments);
     }
 
@@ -234,7 +248,7 @@ exports.sendMessage = async (req, res) => {
             { path: "recipient", select: "username avatar profileIcon" }
         ]);
 
-        const payload = normalizeMessagePayload(req, message);
+        const payload = normalizeMessagePayload(req, message, { channelId });
 
         if (publisher.isOpen) {
             await publisher.publish('CHAT_MESSAGES', JSON.stringify({ type: 'NEW_MESSAGE', data: payload }));
@@ -378,3 +392,4 @@ exports.getMessages = async (req, res) => {
         res.status(500).json({ message: "Internal server error" });
     }
 };
+

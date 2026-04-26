@@ -40,6 +40,7 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+.github/workflows/main.yml
 .gitignore
 api-service/app.js
 api-service/config/env.js
@@ -74,6 +75,19 @@ api-service/server.js
 api-service/services/gridfs.service.js
 api-service/services/s3.service.js
 api-service/services/token.service.js
+api-service/tests/controllers/channel.controller.test.js
+api-service/tests/controllers/character.controller.test.js
+api-service/tests/controllers/ddb.controller.test.js
+api-service/tests/controllers/files.controller.test.js
+api-service/tests/controllers/message.controller.test.js
+api-service/tests/controllers/server.controller.test.js
+api-service/tests/controllers/user.controller.test.js
+api-service/tests/services/gridfs.service.test.js
+api-service/tests/services/s3.service.test.js
+api-service/tests/services/token.service.test.js
+api-service/tests/utils/fileManagement.test.js
+api-service/tests/utils/permissions.test.js
+api-service/tests/utils/serverHelpers.test.js
 api-service/utils/fileManagement.js
 api-service/utils/permissions.js
 api-service/utils/serverHelpers.js
@@ -82,9 +96,11 @@ livekit.yaml
 map-service/Dockerfile
 map-service/index.js
 map-service/package.json
+map-service/tests/map.test.js
 messaging-service/Dockerfile
 messaging-service/index.js
 messaging-service/package.json
+messaging-service/tests/messaging.test.js
 new.toml
 nginx.conf
 nginx.local.conf
@@ -713,6 +729,337 @@ module.exports = {
 };
 </file>
 
+<file path="api-service/tests/controllers/channel.controller.test.js">
+const channelController = require('../../controllers/channel.controller');
+const Server = require('../../models/Server');
+const Channel = require('../../models/Channel');
+const { hasPermission } = require('../../utils/permissions');
+
+jest.mock('../../models/Server');
+jest.mock('../../models/Channel');
+jest.mock('../../models/Roles');
+jest.mock('../../utils/permissions');
+
+describe('Channel Controller', () => {
+    let req, res;
+
+    beforeEach(() => {
+        req = {
+            user: { id: 'user123' },
+            params: { serverId: 'server123', channelId: 'channel123' },
+            body: { name: 'new-channel', type: 'text' }
+        };
+        res = {
+            status: jest.fn().mockReturnThis(),
+            json: jest.fn().mockReturnThis()
+        };
+        jest.clearAllMocks();
+    });
+
+    describe('createChannel', () => {
+        it('should create a channel if user has permissions', async () => {
+            const mockServer = {
+                _id: 'server123',
+                members: [{ user: 'user123' }]
+            };
+            Server.findById.mockResolvedValue(mockServer);
+            hasPermission.mockResolvedValue(true);
+            Channel.countDocuments.mockResolvedValue(0);
+            Channel.create.mockResolvedValue({ name: 'new-channel', position: 0 });
+
+            await channelController.createChannel(req, res);
+
+            expect(Channel.create).toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(201);
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ name: 'new-channel' }));
+        });
+
+        it('should return 403 if user lacks permissions', async () => {
+            Server.findById.mockResolvedValue({
+                members: [{ user: 'user123' }]
+            });
+            hasPermission.mockResolvedValue(false);
+
+            await channelController.createChannel(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(403);
+        });
+
+        it('should return 404 if server not found', async () => {
+            Server.findById.mockResolvedValue(null);
+
+            await channelController.createChannel(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(404);
+        });
+    });
+
+    describe('deleteChannel', () => {
+        it('should delete channel if user has permission', async () => {
+            Server.findById.mockResolvedValue({
+                members: [{ user: 'user123' }]
+            });
+            hasPermission.mockResolvedValue(true);
+            Channel.deleteOne.mockResolvedValue({ deletedCount: 1 });
+
+            await channelController.deleteChannel(req, res);
+
+            expect(Channel.deleteOne).toHaveBeenCalled();
+            expect(res.json).toHaveBeenCalledWith({ message: "Channel deleted" });
+        });
+
+        it('should return 404 if channel not found during deletion', async () => {
+            Server.findById.mockResolvedValue({
+                members: [{ user: 'user123' }]
+            });
+            hasPermission.mockResolvedValue(true);
+            Channel.deleteOne.mockResolvedValue({ deletedCount: 0 });
+
+            await channelController.deleteChannel(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(404);
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/controllers/character.controller.test.js">
+const characterController = require('../../controllers/character.controller');
+const Character = require('../../models/Character');
+const s3Service = require('../../services/s3.service');
+
+jest.mock('../../models/Character');
+jest.mock('../../services/s3.service');
+jest.mock('redis', () => ({
+    createClient: jest.fn().mockReturnValue({
+        on: jest.fn(),
+        connect: jest.fn().mockResolvedValue(),
+        publish: jest.fn().mockResolvedValue(),
+        isOpen: true
+    })
+}));
+
+describe('Character Controller', () => {
+    let req, res;
+
+    beforeEach(() => {
+        req = {
+            user: { id: 'user123' },
+            params: { id: 'char123' },
+            body: { name: 'Gimli', race: 'Dwarf', baseStats: '{}', classes: '[]' },
+            protocol: 'http',
+            get: jest.fn().mockReturnValue('localhost')
+        };
+        res = {
+            status: jest.fn().mockReturnThis(),
+            json: jest.fn().mockReturnThis()
+        };
+        jest.clearAllMocks();
+    });
+
+    describe('getMyCharacters', () => {
+        it('should return user characters', async () => {
+            const mockCharacters = [{ name: 'Gimli', ownerId: 'user123' }];
+            Character.find.mockReturnValue({
+                sort: jest.fn().mockReturnThis(),
+                lean: jest.fn().mockResolvedValue(mockCharacters)
+            });
+
+            await characterController.getMyCharacters(req, res);
+
+            expect(Character.find).toHaveBeenCalledWith({ ownerId: 'user123' });
+            expect(res.json).toHaveBeenCalledWith(mockCharacters);
+        });
+    });
+
+    describe('deleteCharacter', () => {
+        it('should delete character if user is owner', async () => {
+            const mockCharacter = {
+                _id: 'char123',
+                ownerId: 'user123',
+                servers: [],
+                deleteOne: jest.fn().mockResolvedValue()
+            };
+            Character.findOne.mockResolvedValue(mockCharacter);
+
+            await characterController.deleteCharacter(req, res);
+
+            expect(mockCharacter.deleteOne).toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(200);
+        });
+
+        it('should return 404 if character not found or unauthorized', async () => {
+            Character.findOne.mockResolvedValue(null);
+
+            await characterController.deleteCharacter(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(404);
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/utils/fileManagement.test.js">
+const { uploadToGridFS } = require('../../utils/fileManagement');
+const getBucket = require('../../services/gridfs.service');
+const { EventEmitter } = require('events');
+
+jest.mock('../../services/gridfs.service');
+
+describe('File Management Utility', () => {
+    describe('uploadToGridFS', () => {
+        let mockBucket, mockUploadStream;
+
+        beforeEach(() => {
+            mockUploadStream = new EventEmitter();
+            mockUploadStream.end = jest.fn();
+            mockBucket = {
+                openUploadStreamWithId: jest.fn().mockReturnValue(mockUploadStream)
+            };
+            getBucket.mockReturnValue(mockBucket);
+        });
+
+        it('should resolve with file URL on successful upload', async () => {
+            const mockFile = {
+                originalname: 'test.txt',
+                mimetype: 'text/plain',
+                buffer: Buffer.from('test data')
+            };
+            const mockReq = { protocol: 'http', get: jest.fn().mockReturnValue('localhost') };
+
+            const uploadPromise = uploadToGridFS(mockFile, mockReq);
+            
+            // Simulate finish event
+            mockUploadStream.emit('finish');
+
+            const result = await uploadPromise;
+            expect(result).toContain('http://localhost/api/files/');
+            expect(mockUploadStream.end).toHaveBeenCalledWith(mockFile.buffer);
+        });
+
+        it('should reject if bucket is not ready', async () => {
+            getBucket.mockReturnValue(null);
+            await expect(uploadToGridFS({}, {})).rejects.toThrow("GridFS not ready");
+        });
+
+        it('should reject on upload stream error', async () => {
+            const mockFile = { originalname: 'test.txt', buffer: Buffer.from('data') };
+            const uploadPromise = uploadToGridFS(mockFile, {});
+            
+            mockUploadStream.emit('error', new Error('Upload failed'));
+
+            await expect(uploadPromise).rejects.toThrow('Upload failed');
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/utils/permissions.test.js">
+const { isAdmin, hasPermission } = require('../../utils/permissions');
+const Role = require('../../models/Roles');
+
+jest.mock('../../models/Roles');
+
+describe('Permissions Utility', () => {
+    describe('isAdmin', () => {
+        it('should return true if user has owner or admin roles', () => {
+            expect(isAdmin({ roles: ['owner'] })).toBe(true);
+            expect(isAdmin({ roles: ['admin'] })).toBe(true);
+        });
+
+        it('should return false for other roles', () => {
+            expect(isAdmin({ roles: ['player'] })).toBe(false);
+        });
+    });
+
+    describe('hasPermission', () => {
+        let mockServer, mockMember;
+
+        beforeEach(() => {
+            mockServer = { owner: 'user123' };
+            mockMember = { user: 'user123', roles: ['role1'] };
+            jest.clearAllMocks();
+        });
+
+        it('should return true if user is the server owner', async () => {
+            const result = await hasPermission(mockServer, mockMember, 'MANAGE_SERVER');
+            expect(result).toBe(true);
+        });
+
+        it('should return true if user has a role with ADMINISTRATOR permission', async () => {
+            mockServer.owner = 'otherUser';
+            Role.find.mockResolvedValue([{ permissions: { ADMINISTRATOR: true } }]);
+
+            const result = await hasPermission(mockServer, mockMember, 'MANAGE_SERVER');
+            expect(result).toBe(true);
+        });
+
+        it('should return true if user has specific permission', async () => {
+            mockServer.owner = 'otherUser';
+            Role.find.mockResolvedValue([{ permissions: { MANAGE_CHANNELS: true } }]);
+
+            const result = await hasPermission(mockServer, mockMember, 'MANAGE_CHANNELS');
+            expect(result).toBe(true);
+        });
+
+        it('should return false if user lacks permission', async () => {
+            mockServer.owner = 'otherUser';
+            Role.find.mockResolvedValue([{ permissions: { MANAGE_CHANNELS: false } }]);
+
+            const result = await hasPermission(mockServer, mockMember, 'MANAGE_ROLES');
+            expect(result).toBe(false);
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/utils/serverHelpers.test.js">
+const { getServerAndMember } = require('../../utils/serverHelpers');
+const Server = require('../../models/Server');
+
+jest.mock('../../models/Server');
+
+describe('Server Helpers Utility', () => {
+    describe('getServerAndMember', () => {
+        it('should return server and member if found', async () => {
+            const mockServer = {
+                _id: 'server123',
+                members: [{ user: 'user123' }]
+            };
+            Server.findById.mockResolvedValue(mockServer);
+
+            const result = await getServerAndMember('server123', 'user123');
+
+            expect(result.server).toBeDefined();
+            expect(result.member).toBeDefined();
+            expect(result.error).toBeUndefined();
+        });
+
+        it('should return 404 error if server not found', async () => {
+            Server.findById.mockResolvedValue(null);
+
+            const result = await getServerAndMember('wrong-id', 'user123');
+
+            expect(result.error.status).toBe(404);
+            expect(result.error.message).toBe("Server not found");
+        });
+
+        it('should return 403 error if user is not a member', async () => {
+            const mockServer = {
+                _id: 'server123',
+                members: [{ user: 'otherUser' }]
+            };
+            Server.findById.mockResolvedValue(mockServer);
+
+            const result = await getServerAndMember('server123', 'user123');
+
+            expect(result.error.status).toBe(403);
+            expect(result.error.message).toBe("Not a member of this server");
+        });
+    });
+});
+</file>
+
 <file path="api-service/utils/fileManagement.js">
 const getBucket = require("../services/gridfs.service");
 const {Types} = require("mongoose");
@@ -787,60 +1134,337 @@ exports.getServerAndMember = async (serverId, userId) => {
 };
 </file>
 
-<file path="map-service/package.json">
-{
-  "name": "map-service",
-  "version": "1.0.0",
-  "description": "Real-time socket service with Redis Pub/Sub integration",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
-  },
-  "keywords": [
-    "socket.io",
-    "redis",
-    "nodejs",
-    "realtime"
-  ],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "redis": "^4.6.10",
-    "socket.io": "^4.7.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  }
-}
+<file path="map-service/tests/map.test.js">
+const { server, io, start, shutdown, redisClient } = require('../index');
+const ioClient = require('socket.io-client');
+
+let hostSocket;
+let playerSocket;
+let redisData = new Map();
+
+// Mock Redis Client
+const mockRedisClient = {
+    connect: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockImplementation((key, value) => {
+        redisData.set(key, value);
+        return Promise.resolve();
+    }),
+    get: jest.fn().mockImplementation((key) => {
+        return Promise.resolve(redisData.get(key));
+    }),
+    del: jest.fn().mockImplementation((key) => {
+        redisData.delete(key);
+        return Promise.resolve();
+    }),
+    quit: jest.fn().mockResolvedValue(null),
+    isOpen: true,
+};
+
+beforeAll((done) => {
+    server.listen(() => {
+        const port = server.address().port;
+        start(mockRedisClient).then(() => {
+            done();
+        });
+    });
+});
+
+afterAll(async () => {
+    await shutdown();
+});
+
+afterEach(() => {
+    if (hostSocket && hostSocket.connected) hostSocket.disconnect();
+    if (playerSocket && playerSocket.connected) playerSocket.disconnect();
+    redisData.clear();
+    jest.clearAllMocks();
+});
+
+const createSocket = () => {
+    const port = server.address().port;
+    return ioClient(`http://localhost:${port}`, {
+        path: '/map/',
+        transports: ['websocket'],
+        forceNew: true
+    });
+};
+
+describe('Map Service (VTT Sync)', () => {
+    test('should allow a user to host a session', (done) => {
+        hostSocket = createSocket();
+        const roomId = 'test-room-1';
+        const initialState = { tokens: [], walls: [], gridSize: 50 };
+
+        hostSocket.on('connect', () => {
+            hostSocket.emit('host-session', { roomId, initialState });
+            
+            setTimeout(() => {
+                expect(redisData.has(`room:${roomId}`)).toBe(true);
+                expect(redisData.get(`room:${roomId}:host`)).toBe(hostSocket.id);
+                done();
+            }, 100);
+        });
+    });
+
+    test('should allow a player to join an existing session', (done) => {
+        const roomId = 'test-room-2';
+        const state = JSON.stringify({ tokens: [{ id: 1, x: 10, y: 10 }], version: 1 });
+        redisData.set(`room:${roomId}`, state);
+        redisData.set(`room:${roomId}:host`, 'some-host-id');
+
+        playerSocket = createSocket();
+        playerSocket.on('connect', () => {
+            playerSocket.emit('join-session', { roomId });
+
+            playerSocket.on('map-update', (receivedState) => {
+                expect(receivedState.version).toBe(1);
+                expect(receivedState.tokens[0].id).toBe(1);
+                done();
+            });
+        });
+    });
+
+    test('should sync actions between host and players', (done) => {
+        const roomId = 'test-room-3';
+        const initialState = { tokens: [{ id: 't1', x: 0, y: 0 }], version: 0 };
+        redisData.set(`room:${roomId}`, JSON.stringify(initialState));
+
+        hostSocket = createSocket();
+        playerSocket = createSocket();
+
+        // Host joins first
+        hostSocket.on('connect', () => {
+            hostSocket.emit('host-session', { roomId });
+
+            // Player joins after host
+            playerSocket.on('connect', () => {
+                playerSocket.emit('join-session', { roomId });
+                
+                playerSocket.on('remote-action', (payload) => {
+                    if (payload.action === 'token-move') {
+                        expect(payload.data.id).toBe('t1');
+                        expect(payload.data.x).toBe(100);
+                        done();
+                    }
+                });
+
+                // Small delay to ensure player has joined the room on server side
+                setTimeout(() => {
+                    hostSocket.emit('sync-action', { 
+                        roomId, 
+                        action: 'token-move', 
+                        data: { id: 't1', x: 100, y: 100 } 
+                    });
+                }, 100);
+            });
+        });
+    });
+
+    test('should handle turn order updates', (done) => {
+        const roomId = 'test-room-4';
+        const initialState = { tokens: [], turnOrder: { entries: [] }, version: 0 };
+        redisData.set(`room:${roomId}`, JSON.stringify(initialState));
+
+        hostSocket = createSocket();
+        hostSocket.on('connect', () => {
+            // Must join room to receive the broadcast back
+            hostSocket.emit('host-session', { roomId });
+
+            hostSocket.on('remote-action', (payload) => {
+                if (payload.action === 'turn-order-sync') {
+                    expect(payload.data.entries[0].id).toBe('char1');
+                    done();
+                }
+            });
+
+            setTimeout(() => {
+                hostSocket.emit('sync-action', {
+                    roomId,
+                    action: 'turn-order-add',
+                    data: { id: 'char1', name: 'Hero', initiative: 20 }
+                });
+            }, 100);
+        });
+    });
+
+    test('should return error if joining non-existent room', (done) => {
+        playerSocket = createSocket();
+        playerSocket.on('connect', () => {
+            playerSocket.emit('join-session', { roomId: 'non-existent' });
+            playerSocket.on('error', (msg) => {
+                expect(msg).toBe('Room does not exist yet.');
+                done();
+            });
+        });
+    });
+});
 </file>
 
-<file path="messaging-service/package.json">
-{
-  "name": "messaging-service",
-  "version": "1.0.0",
-  "description": "Real-time socket service with Redis Pub/Sub integration",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
-  },
-  "keywords": [
-    "socket.io",
-    "redis",
-    "nodejs",
-    "realtime"
-  ],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "redis": "^4.6.10",
-    "socket.io": "^4.7.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  }
-}
+<file path="messaging-service/tests/messaging.test.js">
+const { server, io, start, shutdown, userSocketMap } = require('../index');
+const ioClient = require('socket.io-client');
+const http = require('http');
+
+let clientSocket;
+let redisCallbacks = {};
+
+// Mock Redis Client
+const mockRedisClient = {
+    connect: jest.fn().mockResolvedValue(null),
+    subscribe: jest.fn().mockImplementation((channel, callback) => {
+        redisCallbacks[channel] = callback;
+        return Promise.resolve();
+    }),
+    isOpen: true,
+};
+
+beforeAll((done) => {
+    // Start server on a random port for testing
+    server.listen(() => {
+        const port = server.address().port;
+        start(mockRedisClient).then(() => {
+            done();
+        });
+    });
+});
+
+afterAll(async () => {
+    await shutdown('TEST');
+});
+
+beforeEach((done) => {
+    const port = server.address().port;
+    clientSocket = ioClient(`http://localhost:${port}`, {
+        path: '/socket.io/',
+        auth: { userId: 'user123' },
+        forceNew: true
+    });
+    clientSocket.on('connect', done);
+});
+
+afterEach(() => {
+    if (clientSocket.connected) {
+        clientSocket.disconnect();
+    }
+    userSocketMap.clear();
+    // Do NOT clear redisCallbacks here because start() only runs once in beforeAll
+});
+
+describe('Messaging Service', () => {
+    test('should map userId to socketId on connection', () => {
+        expect(userSocketMap.has('user123')).toBe(true);
+        expect(userSocketMap.get('user123')).toBe(clientSocket.id);
+    });
+
+    test('should join channel room', (done) => {
+        const channelId = 'channel_A';
+        clientSocket.emit('join_channel', channelId);
+        
+        setTimeout(() => {
+            const socket = io.sockets.sockets.get(clientSocket.id);
+            expect(socket.rooms.has(channelId)).toBe(true);
+            done();
+        }, 100);
+    });
+
+    test('should join server room', (done) => {
+        const serverId = 'server_B';
+        clientSocket.emit('join_server', serverId);
+        
+        setTimeout(() => {
+            const socket = io.sockets.sockets.get(clientSocket.id);
+            expect(socket.rooms.has(`server:${serverId}`)).toBe(true);
+            done();
+        }, 100);
+    });
+
+    test('should broadcast message to channel', (done) => {
+        const channelId = 'channel_A';
+        const messageData = { channelId, text: 'Hello', author: 'user123' };
+        
+        clientSocket.emit('join_channel', channelId);
+
+        clientSocket.on('new_message', (data) => {
+            expect(data.text).toBe('Hello');
+            expect(data.channelId).toBe(channelId);
+            done();
+        });
+
+        setTimeout(() => {
+            const payload = JSON.stringify({
+                type: 'NEW_MESSAGE',
+                data: messageData
+            });
+            if (redisCallbacks['CHAT_MESSAGES']) {
+                redisCallbacks['CHAT_MESSAGES'](payload);
+            } else {
+                done(new Error('CHAT_MESSAGES callback not registered'));
+            }
+        }, 100);
+    });
+
+    test('should handle whispers correctly', (done) => {
+        const recipientId = 'recipient456';
+        const whisperData = { 
+            text: 'Secret', 
+            author: 'user123', 
+            recipient: recipientId,
+            isWhisper: true 
+        };
+
+        const ioToSpy = jest.spyOn(io, 'to');
+        userSocketMap.set(recipientId, 'recipient-socket-id');
+
+        const payload = JSON.stringify({
+            type: 'NEW_MESSAGE',
+            data: whisperData
+        });
+        
+        if (redisCallbacks['CHAT_MESSAGES']) {
+            redisCallbacks['CHAT_MESSAGES'](payload);
+            expect(ioToSpy).toHaveBeenCalledWith(clientSocket.id); // Sender
+            expect(ioToSpy).toHaveBeenCalledWith('recipient-socket-id'); // Recipient
+            ioToSpy.mockRestore();
+            done();
+        } else {
+            ioToSpy.mockRestore();
+            done(new Error('CHAT_MESSAGES callback not registered'));
+        }
+    });
+
+    test('should broadcast server updates', (done) => {
+        const serverId = 'server_B';
+        clientSocket.emit('join_server', serverId);
+
+        clientSocket.on('member_update', (data) => {
+            expect(data.userId).toBe('user456');
+            done();
+        });
+
+        setTimeout(() => {
+            const payload = JSON.stringify({
+                type: 'MEMBER_UPDATE',
+                serverId: serverId,
+                data: { userId: 'user456' }
+            });
+            if (redisCallbacks['SERVER_UPDATES']) {
+                redisCallbacks['SERVER_UPDATES'](payload);
+            } else {
+                done(new Error('SERVER_UPDATES callback not registered'));
+            }
+        }, 100);
+    });
+
+    test('should remove userId from map on disconnect', (done) => {
+        expect(userSocketMap.has('user123')).toBe(true);
+        clientSocket.disconnect();
+        
+        setTimeout(() => {
+            expect(userSocketMap.has('user123')).toBe(false);
+            done();
+        }, 100);
+    });
+});
 </file>
 
 <file path="new.toml">
@@ -896,137 +1520,6 @@ const ChannelSchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('Channel', ChannelSchema);
-</file>
-
-<file path="api-service/routes/auth.routes.js">
-const express = require('express');
-const bcrypt = require('bcrypt');
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
-const RefreshToken = require('../models/RefreshToken');
-const {
-    generateAccessToken,
-    createRefreshToken,
-    rotateRefreshToken,
-} = require('../services/token.service');
-
-const router = express.Router();
-
-/**
- * REGISTER
- */
-router.post('/register', async (req, res) => {
-    try {
-        const { username, email, password } = req.body;
-
-        if (!username || !email || !password) {
-            return res.status(400).json({ message: 'All fields are required' });
-        }
-
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            return res.status(409).json({ message: 'Email already in use' });
-        }
-
-        const hashed = await bcrypt.hash(password, 12);
-        const user = await User.create({ username, email, password: hashed });
-
-        res.status(201).json({ id: user._id, message: 'User created successfully' });
-    } catch (error) {
-        console.error('Registration Error:', error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
-
-/**
- * LOGIN
- */
-router.post('/login', async (req, res) => {
-    try {
-        const { email, password } = req.body;
-
-        const user = await User.findOne({ email });
-        if (!user) return res.sendStatus(401);
-
-        const valid = await bcrypt.compare(password, user.password);
-        if (!valid) return res.sendStatus(401);
-
-        const accessToken = generateAccessToken(user);
-        const refreshToken = await createRefreshToken(user._id);
-
-        res
-            .cookie('refreshToken', refreshToken, {
-                httpOnly: true,
-                sameSite: 'lax',
-                secure: false, // Set to true in production with HTTPS
-            })
-            .json({ accessToken }); // Don't send refreshToken in body if using cookies
-    } catch (error) {
-        console.error('Login Error:', error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
-
-router.post('/refresh', async (req, res) => {
-    try {
-        const oldToken = req.cookies.refreshToken;
-        if (!oldToken) return res.sendStatus(401);
-
-        const oldHash = crypto
-            .createHash('sha256')
-            .update(oldToken)
-            .digest('hex');
-
-        const stored = await RefreshToken.findOne({ tokenHash: oldHash }).populate('user');
-
-        if (!stored || stored.expiresAt < Date.now()) {
-            if (stored) {
-                await RefreshToken.deleteOne({ tokenHash: oldHash });
-            }
-            return res.status(403).json({ message: "Refresh Token Aged Out" });
-        }
-
-        const newRefreshToken = await rotateRefreshToken(
-            oldToken,
-            stored.user._id
-        );
-
-        const accessToken = generateAccessToken(stored.user);
-
-        res
-            .cookie('refreshToken', newRefreshToken, {
-                httpOnly: true,
-                sameSite: 'lax',
-                secure: false, // Set to true in production with HTTPS
-            })
-            .json({ accessToken });
-    } catch (error) {
-        console.error('Refresh Error:', error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
-
-/**
- * LOGOUT
- */
-router.post('/logout', async (req, res) => {
-    try {
-        const token = req.cookies.refreshToken;
-
-        if (token) {
-            const hash = crypto.createHash('sha256').update(token).digest('hex');
-            await RefreshToken.deleteOne({ tokenHash: hash });
-        }
-
-        res.clearCookie('refreshToken').sendStatus(204);
-    } catch (error) {
-        console.error('Logout Error:', error);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
-
-module.exports = router;
 </file>
 
 <file path="api-service/routes/character.routes.js">
@@ -1091,77 +1584,845 @@ router.delete("/reaction/:messageId", auth, removeReaction);
 module.exports = router;
 </file>
 
-<file path="api-service/services/s3.service.js">
-const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
-const { Upload } = require("@aws-sdk/lib-storage");
-const crypto = require("crypto");
+<file path="api-service/tests/controllers/ddb.controller.test.js">
+const ddbController = require('../../controllers/ddb.controller');
+const axios = require('axios');
 
-const s3Client = new S3Client({
-    region: process.env.AWS_REGION,
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
+jest.mock('axios');
+
+describe('DDB Controller', () => {
+    let req, res;
+
+    beforeEach(() => {
+        req = {
+            params: { query: '12345' }
+        };
+        res = {
+            status: jest.fn().mockReturnThis(),
+            json: jest.fn().mockReturnThis()
+        };
+        jest.clearAllMocks();
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+        jest.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        console.warn.mockRestore();
+        console.log.mockRestore();
+    });
+
+    describe('getCharacter', () => {
+        it('should return processed character data on success', async () => {
+            const mockDdbResponse = {
+                data: {
+                    success: true,
+                    data: {
+                        id: 12345,
+                        name: 'Test Hero',
+                        race: { fullName: 'Human' },
+                        stats: [{ id: 1, value: 10 }, { id: 2, value: 10 }, { id: 3, value: 10 }, { id: 4, value: 10 }, { id: 5, value: 10 }, { id: 6, value: 10 }],
+                        bonusStats: [],
+                        overrideStats: [],
+                        classes: [{ definition: { name: 'Fighter' }, level: 1 }],
+                        baseArmorClass: 10
+                    }
+                }
+            };
+            axios.get.mockResolvedValue(mockDdbResponse);
+
+            await ddbController.getCharacter(req, res);
+
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+                name: 'Test Hero',
+                race: 'Human'
+            }));
+        });
+
+        it('should return 400 for invalid character ID', async () => {
+            req.params.query = 'abc';
+            await ddbController.getCharacter(req, res);
+            expect(res.status).toHaveBeenCalledWith(400);
+        });
+
+        it('should return 404 if character not found', async () => {
+            axios.get.mockRejectedValue(new Error('Not Found'));
+            await ddbController.getCharacter(req, res);
+            expect(res.status).toHaveBeenCalledWith(404);
+        });
+    });
 });
-
-/**
- * Uploads a buffer or stream to S3.
- */
-exports.uploadToS3 = async (buffer, filename, contentType) => {
-    const fileId = crypto.randomUUID();
-    // Reverting to original key format: uuid-filename
-    const key = `${fileId}-${filename}`; 
-
-    console.log(`[S3Service] Uploading to S3: ${key} (${contentType})`);
-
-    const parallelUploads3 = new Upload({
-        client: s3Client,
-        params: {
-            Bucket: process.env.AWS_BUCKET_NAME,
-            Key: key,
-            Body: buffer,
-            ContentType: contentType
-        },
-    });
-
-    await parallelUploads3.done();
-
-    return {
-        id: fileId,
-        key: key, // This key now includes the filename
-        filename: filename,
-        contentType: contentType
-    };
-};
-
-/**
- * Fetches an object stream from S3.
- */
-exports.getObjectStream = async (key) => {
-    const command = new GetObjectCommand({
-        Bucket: process.env.AWS_BUCKET_NAME,
-        Key: key,
-    });
-
-    const response = await s3Client.send(command);
-    return {
-        stream: response.Body,
-        contentType: response.ContentType,
-        contentLength: response.ContentLength
-    };
-};
 </file>
 
-<file path=".gitignore">
-.env.development
-.env.production
-.env
-./.env
+<file path="api-service/tests/controllers/files.controller.test.js">
+const filesController = require('../../controllers/files.controller');
+const s3Service = require('../../services/s3.service');
+const fs = require('fs-extra');
 
+jest.mock('../../services/s3.service');
+jest.mock('fs-extra');
+jest.mock('sharp', () => jest.fn().mockReturnValue({
+    metadata: jest.fn().mockResolvedValue({ format: 'jpeg' }),
+    jpeg: jest.fn().mockReturnThis(),
+    toBuffer: jest.fn().mockResolvedValue(Buffer.from('mock-buffer'))
+}));
 
-.env
-node_modules
-./node_modules
+describe('Files Controller', () => {
+    let req, res;
+
+    beforeEach(() => {
+        req = {
+            params: { id: 'file-key' },
+            body: {},
+            protocol: 'http',
+            get: jest.fn().mockReturnValue('localhost')
+        };
+        res = {
+            status: jest.fn().mockReturnThis(),
+            json: jest.fn().mockReturnThis(),
+            set: jest.fn().mockReturnThis()
+        };
+        jest.clearAllMocks();
+        jest.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        console.log.mockRestore();
+    });
+
+    describe('getFile', () => {
+        it('should stream the file from S3', async () => {
+            const mockStream = { pipe: jest.fn() };
+            s3Service.getObjectStream.mockResolvedValue({
+                stream: mockStream,
+                contentType: 'image/jpeg',
+                contentLength: 1024
+            });
+
+            await filesController.getFile(req, res);
+
+            expect(res.set).toHaveBeenCalledWith('Content-Type', 'image/jpeg');
+            expect(mockStream.pipe).toHaveBeenCalledWith(res);
+        });
+
+        it('should return 404 if file not found in S3', async () => {
+            s3Service.getObjectStream.mockResolvedValue({ stream: null });
+            await filesController.getFile(req, res);
+            expect(res.status).toHaveBeenCalledWith(404);
+        });
+    });
+
+    describe('uploadFile', () => {
+        it('should upload a file to S3', async () => {
+            req.file = {
+                buffer: Buffer.from('test'),
+                mimetype: 'image/jpeg',
+                originalname: 'test.jpg',
+                size: 1000
+            };
+            s3Service.uploadToS3.mockResolvedValue({
+                key: 's3-key',
+                id: '123',
+                filename: 'test.jpg',
+                contentType: 'image/jpeg'
+            });
+
+            await filesController.uploadFile(req, res);
+
+            expect(s3Service.uploadToS3).toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(201);
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ url: 'http://localhost/api/files/s3-key' }));
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/controllers/message.controller.test.js">
+jest.mock('redis', () => ({
+    createClient: jest.fn().mockReturnValue({
+        on: jest.fn(),
+        connect: jest.fn().mockResolvedValue(),
+        publish: jest.fn().mockResolvedValue(),
+        isOpen: true
+    })
+}));
+
+jest.mock('../../models/Message');
+jest.mock('../../models/Channel');
+jest.mock('../../models/Server');
+jest.mock('../../models/Roles');
+jest.mock('../../models/Character');
+
+const messageController = require('../../controllers/message.controller');
+const Message = require('../../models/Message');
+const Channel = require('../../models/Channel');
+const Server = require('../../models/Server');
+const Role = require('../../models/Roles');
+const Character = require('../../models/Character');
+
+describe('Message Controller', () => {
+    let req;
+    let res;
+
+    beforeEach(() => {
+        req = {
+            user: { id: 'user123' },
+            params: { channelId: 'channel123', messageId: 'msg123' },
+            body: { content: 'Hello', emoji: '😀' },
+            protocol: 'http',
+            get: jest.fn().mockReturnValue('localhost')
+        };
+
+        res = {
+            status: jest.fn().mockReturnThis(),
+            json: jest.fn().mockReturnThis()
+        };
+
+        jest.clearAllMocks();
+    });
+
+    describe('sendMessage', () => {
+        it('creates and returns a message when the user can send', async () => {
+            Channel.findById.mockResolvedValue({
+                _id: 'channel123',
+                server: 'server123',
+                permissionOverwrites: []
+            });
+            Server.findById.mockResolvedValue({
+                _id: 'server123',
+                owner: { toString: () => 'user123' }
+            });
+
+            const payload = {
+                _id: 'msg123',
+                content: 'Hello',
+                attachments: [],
+                author: { _id: 'user123' }
+            };
+            const mockMessage = {
+                populate: jest.fn().mockResolvedValue(),
+                toObject: jest.fn().mockReturnValue(payload)
+            };
+            Message.create.mockResolvedValue(mockMessage);
+
+            await messageController.sendMessage(req, res);
+
+            expect(Message.create).toHaveBeenCalledWith({
+                channel: 'channel123',
+                server: 'server123',
+                author: 'user123',
+                character: null,
+                content: 'Hello',
+                attachments: [],
+                replyTo: null,
+                isWhisper: false,
+                recipient: null
+            });
+            expect(mockMessage.populate).toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(201);
+            expect(res.json).toHaveBeenCalledWith({
+                ...payload,
+                channelId: 'channel123'
+            });
+        });
+
+        it('returns 403 when the user lacks SEND_MESSAGES permission', async () => {
+            Channel.findById.mockResolvedValue({
+                _id: 'channel123',
+                server: 'server123',
+                permissionOverwrites: []
+            });
+            Server.findById.mockResolvedValue({
+                _id: 'server123',
+                owner: { toString: () => 'owner123' },
+                members: [{ user: { toString: () => 'user123' }, roles: [] }]
+            });
+            Role.find.mockResolvedValue([]);
+
+            await messageController.sendMessage(req, res);
+
+            expect(Message.create).not.toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(403);
+            expect(res.json).toHaveBeenCalledWith({ message: 'Permission denied' });
+        });
+
+        it('returns 403 when the provided character does not belong to the user', async () => {
+            req.body.characterId = 'char123';
+
+            Channel.findById.mockResolvedValue({
+                _id: 'channel123',
+                server: 'server123',
+                permissionOverwrites: []
+            });
+            Server.findById.mockResolvedValue({
+                _id: 'server123',
+                owner: { toString: () => 'user123' }
+            });
+            Character.findOne.mockResolvedValue(null);
+
+            await messageController.sendMessage(req, res);
+
+            expect(Character.findOne).toHaveBeenCalledWith({
+                _id: 'char123',
+                ownerId: 'user123'
+            });
+            expect(Message.create).not.toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(403);
+            expect(res.json).toHaveBeenCalledWith({ message: 'Invalid character' });
+        });
+    });
+
+    describe('getMessages', () => {
+        const buildQueryChain = (messages) => {
+            const chain = {
+                sort: jest.fn().mockReturnThis(),
+                limit: jest.fn().mockReturnThis(),
+                populate: jest.fn().mockReturnThis(),
+                lean: jest.fn().mockResolvedValue(messages)
+            };
+
+            return chain;
+        };
+
+        it('loads all messages in a whisper channel for the recipient', async () => {
+            const whisperChannel = {
+                _id: 'channel123',
+                server: 'server123',
+                type: 'whisper',
+                recipient: { toString: () => 'user123' },
+                permissionOverwrites: []
+            };
+            Channel.findById.mockResolvedValue(whisperChannel);
+            Server.findById
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                })
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                });
+            Role.find.mockResolvedValue([
+                { permissions: { READ_MESSAGE_HISTORY: true } }
+            ]);
+
+            const messages = [
+                { _id: 'msg1', content: 'old whisper', isWhisper: true, recipient: 'someone-else' },
+                { _id: 'msg2', content: 'new whisper', isWhisper: true, recipient: 'user123' }
+            ];
+            const chain = buildQueryChain(messages);
+            Message.find.mockReturnValue(chain);
+
+            await messageController.getMessages(req, res);
+
+            expect(Message.find).toHaveBeenCalledWith({ channel: 'channel123' });
+            expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1 });
+            expect(chain.limit).toHaveBeenCalledWith(50);
+            expect(res.json).toHaveBeenCalledWith(messages);
+        });
+
+        it('returns 403 when a non-participant requests a whisper channel history', async () => {
+            const whisperChannel = {
+                _id: 'channel123',
+                server: 'server123',
+                type: 'whisper',
+                recipient: { toString: () => 'recipient456' },
+                permissionOverwrites: []
+            };
+            Channel.findById.mockResolvedValue(whisperChannel);
+            Server.findById
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                })
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                });
+            Role.find.mockResolvedValue([
+                { permissions: { READ_MESSAGE_HISTORY: true } }
+            ]);
+
+            await messageController.getMessages(req, res);
+
+            expect(Message.find).not.toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(403);
+            expect(res.json).toHaveBeenCalledWith({ message: 'Access denied' });
+        });
+
+        it('filters non-whisper channel history to public messages and the user whisper traffic', async () => {
+            Channel.findById.mockResolvedValue({
+                _id: 'channel123',
+                server: 'server123',
+                type: 'text',
+                permissionOverwrites: []
+            });
+            Server.findById
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                })
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                });
+            Role.find.mockResolvedValue([
+                { permissions: { READ_MESSAGE_HISTORY: true } }
+            ]);
+
+            const chain = buildQueryChain([]);
+            Message.find.mockReturnValue(chain);
+
+            await messageController.getMessages(req, res);
+
+            expect(Message.find).toHaveBeenCalledWith({
+                channel: 'channel123',
+                $or: [
+                    { isWhisper: { $ne: true } },
+                    { author: 'user123' },
+                    { recipient: 'user123' }
+                ]
+            });
+            expect(res.json).toHaveBeenCalledWith([]);
+        });
+    });
+
+    describe('addReaction', () => {
+        it('adds a new reaction when the emoji does not exist yet', async () => {
+            const mockMessage = {
+                _id: 'msg123',
+                channel: 'channel123',
+                reactions: [],
+                save: jest.fn().mockResolvedValue()
+            };
+            Message.findById.mockResolvedValue(mockMessage);
+
+            await messageController.addReaction(req, res);
+
+            expect(mockMessage.reactions).toEqual([{ emoji: '😀', users: ['user123'] }]);
+            expect(mockMessage.save).toHaveBeenCalled();
+            expect(res.json).toHaveBeenCalledWith(mockMessage.reactions);
+        });
+
+        it('does not duplicate a user when they react with the same emoji twice', async () => {
+            const mockMessage = {
+                _id: 'msg123',
+                channel: 'channel123',
+                reactions: [{ emoji: '😀', users: ['user123'] }],
+                save: jest.fn().mockResolvedValue()
+            };
+            Message.findById.mockResolvedValue(mockMessage);
+
+            await messageController.addReaction(req, res);
+
+            expect(mockMessage.reactions).toEqual([{ emoji: '😀', users: ['user123'] }]);
+            expect(mockMessage.save).toHaveBeenCalled();
+            expect(res.json).toHaveBeenCalledWith(mockMessage.reactions);
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/controllers/server.controller.test.js">
+const serverController = require('../../controllers/server.controller');
+const Server = require('../../models/Server');
+const Role = require('../../models/Roles');
+const Character = require('../../models/Character');
+const { hasPermission } = require('../../utils/permissions');
+
+jest.mock('../../models/Server');
+jest.mock('../../models/Channel');
+jest.mock('../../models/Roles');
+jest.mock('../../models/Character');
+jest.mock('../../services/s3.service');
+jest.mock('../../utils/permissions');
+jest.mock('redis', () => ({
+    createClient: jest.fn().mockReturnValue({
+        on: jest.fn(),
+        connect: jest.fn().mockResolvedValue(),
+        publish: jest.fn().mockResolvedValue(),
+        isOpen: true
+    })
+}));
+
+describe('Server Controller', () => {
+    let req, res;
+
+    // Helper to mock Mongoose query chain
+    const mockQuery = (val) => {
+        const query = {
+            populate: jest.fn().mockReturnThis(),
+            lean: jest.fn().mockReturnThis(),
+            sort: jest.fn().mockReturnThis(),
+            select: jest.fn().mockReturnThis(),
+            exec: jest.fn().mockResolvedValue(val),
+            // Make it thenable so 'await' works directly on the query object
+            then: jest.fn((resolve, reject) => {
+                return Promise.resolve(val).then(resolve, reject);
+            }),
+            catch: jest.fn((reject) => {
+                return Promise.resolve(val).catch(reject);
+            })
+        };
+        return query;
+    };
+
+    beforeEach(() => {
+        req = {
+            user: { id: 'user123' },
+            params: { serverId: 'server123' },
+            body: { name: 'New Server' },
+            protocol: 'http',
+            get: jest.fn().mockReturnValue('localhost')
+        };
+        res = {
+            status: jest.fn().mockReturnThis(),
+            json: jest.fn().mockReturnThis()
+        };
+        jest.clearAllMocks();
+
+        // Default chainable mocks to prevent "Cannot read properties of undefined (reading 'populate')"
+        Server.findById.mockReturnValue(mockQuery(null));
+        Server.findOne.mockReturnValue(mockQuery(null));
+        Server.find.mockReturnValue(mockQuery([]));
+        Character.find.mockReturnValue(mockQuery([]));
+        Role.find.mockReturnValue(mockQuery([]));
+        Role.findOne.mockReturnValue(mockQuery(null));
+    });
+
+    describe('createServer', () => {
+        it('should create a server and default role', async () => {
+            const mockServer = {
+                _id: 'server123',
+                roles: [],
+                members: [],
+                save: jest.fn().mockResolvedValue(),
+                toObject: jest.fn().mockReturnValue({ _id: 'server123', name: 'New Server' })
+            };
+            Server.create.mockResolvedValue(mockServer);
+            Role.create.mockResolvedValue({ _id: 'roleEveryone' });
+
+            await serverController.createServer(req, res);
+
+            expect(Server.create).toHaveBeenCalled();
+            expect(Role.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Everyone' }));
+            expect(res.status).toHaveBeenCalledWith(201);
+        });
+    });
+
+    describe('joinServer', () => {
+        it('should allow a user to join with valid code', async () => {
+            const mockServer = {
+                _id: 'server123',
+                joinCode: 'code123',
+                members: [],
+                save: jest.fn().mockResolvedValue()
+            };
+            req.body = { code: 'code123' };
+            Server.findOne.mockReturnValue(mockQuery(mockServer));
+            Role.findOne.mockReturnValue(mockQuery({ _id: 'everyoneRole' }));
+            
+            // Mock notifyMemberUpdate's database calls
+            Server.findById.mockReturnValue(mockQuery({
+                ...mockServer,
+                members: [{ user: { _id: 'user123', username: 'testuser' }, roles: [] }]
+            }));
+
+            await serverController.joinServer(req, res);
+
+            expect(mockServer.members).toHaveLength(1);
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: "Joined server" }));
+        });
+
+        it('should return 404 for invalid code', async () => {
+            req.body = { code: 'wrong' };
+            Server.findOne.mockReturnValue(mockQuery(null));
+
+            await serverController.joinServer(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(404);
+        });
+    });
+
+    describe('deleteServer', () => {
+        it('should allow owner to delete server', async () => {
+            const mockServer = {
+                _id: 'server123',
+                owner: 'user123',
+                deleteOne: jest.fn().mockResolvedValue()
+            };
+            Server.findById.mockReturnValue(mockQuery(mockServer));
+
+            await serverController.deleteServer(req, res);
+
+            expect(mockServer.deleteOne).toHaveBeenCalled();
+            expect(res.json).toHaveBeenCalledWith({ message: "Server and all associated data deleted" });
+        });
+
+        it('should prevent non-owner from deleting', async () => {
+            const mockServer = {
+                _id: 'server123',
+                owner: 'otherUser'
+            };
+            Server.findById.mockReturnValue(mockQuery(mockServer));
+
+            await serverController.deleteServer(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(403);
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/controllers/user.controller.test.js">
+const userController = require('../../controllers/user.controller');
+const User = require('../../models/User');
+const s3Service = require('../../services/s3.service');
+
+jest.mock('../../models/User');
+jest.mock('../../services/s3.service');
+
+describe('User Controller', () => {
+    let req, res;
+
+    beforeEach(() => {
+        req = {
+            user: { id: 'user123' },
+            protocol: 'http',
+            get: jest.fn().mockReturnValue('localhost')
+        };
+        res = {
+            status: jest.fn().mockReturnThis(),
+            json: jest.fn().mockReturnThis(),
+            sendStatus: jest.fn().mockReturnThis()
+        };
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        console.warn.mockRestore();
+    });
+
+    describe('getMe', () => {
+        it('should return user data without password', async () => {
+            const mockUser = {
+                _id: 'user123',
+                username: 'testuser',
+                profileIcon: 'icon.png',
+                toObject: jest.fn().mockReturnThis()
+            };
+            
+            User.findById.mockReturnValue({
+                select: jest.fn().mockReturnThis(),
+                lean: jest.fn().mockResolvedValue(mockUser)
+            });
+
+            await userController.getMe(req, res);
+
+            expect(User.findById).toHaveBeenCalledWith('user123');
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+                username: 'testuser',
+                profileIconUrl: 'http://localhost/api/files/icon.png'
+            }));
+        });
+
+        it('should return 404 if user not found', async () => {
+            User.findById.mockReturnValue({
+                select: jest.fn().mockReturnThis(),
+                lean: jest.fn().mockResolvedValue(null)
+            });
+
+            await userController.getMe(req, res);
+
+            expect(res.sendStatus).toHaveBeenCalledWith(404);
+        });
+    });
+
+    describe('uploadProfileIcon', () => {
+        it('should return 400 if no file uploaded', async () => {
+            req.file = null;
+            await userController.uploadProfileIcon(req, res);
+            expect(res.status).toHaveBeenCalledWith(400);
+            expect(res.json).toHaveBeenCalledWith({ message: "No file uploaded" });
+        });
+
+        it('should upload to S3 and update user', async () => {
+            req.file = {
+                buffer: Buffer.from('test'),
+                mimetype: 'image/jpeg',
+                originalname: 'test.jpg',
+                size: 1000
+            };
+
+            s3Service.uploadToS3.mockResolvedValue({ key: 's3-key' });
+            
+            const mockUser = {
+                _id: 'user123',
+                profileIcon: 's3-key',
+                toObject: jest.fn().mockReturnValue({ profileIcon: 's3-key' })
+            };
+
+            User.findByIdAndUpdate.mockReturnValue({
+                select: jest.fn().mockResolvedValue(mockUser)
+            });
+
+            await userController.uploadProfileIcon(req, res);
+
+            expect(s3Service.uploadToS3).toHaveBeenCalled();
+            expect(User.findByIdAndUpdate).toHaveBeenCalled();
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+                message: "Profile icon updated"
+            }));
+        });
+    });
+});
+</file>
+
+<file path="api-service/tests/services/token.service.test.js">
+const tokenService = require('../../services/token.service');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const RefreshToken = require('../../models/RefreshToken');
+
+jest.mock('jsonwebtoken');
+jest.mock('crypto', () => ({
+    ...jest.requireActual('crypto'),
+    randomBytes: jest.fn(),
+    createHash: jest.fn().mockReturnThis(),
+    update: jest.fn().mockReturnThis(),
+    digest: jest.fn(),
+}));
+jest.mock('../../models/RefreshToken');
+
+describe('Token Service', () => {
+    const mockUser = { _id: 'user123', email: 'test@example.com', username: 'testuser' };
+    const mockAccessTokenSecret = 'accessSecret';
+    const mockRefreshTokenTtlDays = 7;
+
+    beforeAll(() => {
+        process.env.JWT_ACCESS_SECRET = mockAccessTokenSecret;
+        process.env.ACCESS_TOKEN_EXPIRY = '1h';
+        process.env.REFRESH_TOKEN_TTL_DAYS = mockRefreshTokenTtlDays;
+    });
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    describe('generateAccessToken', () => {
+        it('should generate an access token', () => {
+            jwt.sign.mockReturnValue('mockAccessToken');
+            const token = tokenService.generateAccessToken(mockUser);
+            expect(jwt.sign).toHaveBeenCalledWith(
+                { sub: mockUser._id, email: mockUser.email, username: mockUser.username },
+                mockAccessTokenSecret,
+                { expiresIn: '1h' }
+            );
+            expect(token).toBe('mockAccessToken');
+        });
+    });
+
+    describe('generateRefreshToken', () => {
+        it('should generate a random refresh token', () => {
+            crypto.randomBytes.mockReturnValue(Buffer.from('mockRandomBytes'));
+            const token = tokenService.generateRefreshToken();
+            expect(crypto.randomBytes).toHaveBeenCalledWith(64);
+            expect(token).toBe(Buffer.from('mockRandomBytes').toString('hex'));
+        });
+    });
+
+    describe('createRefreshToken', () => {
+        it('should create and save a refresh token', async () => {
+            const mockToken = '6d6f636b52616e646f6d4279746573'; // 'mockRandomBytes' in hex
+            const mockTokenHash = 'mockRefreshTokenHash';
+            
+            crypto.randomBytes.mockReturnValue(Buffer.from('mockRandomBytes'));
+            crypto.createHash.mockReturnThis();
+            crypto.update.mockReturnThis();
+            crypto.digest.mockReturnValue(mockTokenHash);
+            RefreshToken.create.mockResolvedValue({});
+
+            const result = await tokenService.createRefreshToken(mockUser._id);
+
+            expect(crypto.randomBytes).toHaveBeenCalled();
+            expect(crypto.createHash).toHaveBeenCalledWith('sha256');
+            expect(crypto.update).toHaveBeenCalledWith(mockToken);
+            expect(crypto.digest).toHaveBeenCalledWith('hex');
+            expect(RefreshToken.create).toHaveBeenCalledWith(expect.objectContaining({
+                user: mockUser._id,
+                tokenHash: mockTokenHash,
+            }));
+            expect(result).toBe(mockToken);
+        });
+    });
+
+    describe('rotateRefreshToken', () => {
+        it('should invalidate old token and create a new one', async () => {
+            const oldToken = 'oldRefreshToken';
+            const oldTokenHash = 'oldRefreshTokenHash';
+            const newTokenBytes = Buffer.from('newRandomBytes');
+            const newToken = newTokenBytes.toString('hex');
+            const newTokenHash = 'newRefreshTokenHash';
+
+            crypto.randomBytes.mockReturnValue(newTokenBytes);
+            crypto.createHash
+                .mockReturnValueOnce({ update: jest.fn().mockReturnThis(), digest: jest.fn().mockReturnValue(oldTokenHash) })
+                .mockReturnValueOnce({ update: jest.fn().mockReturnThis(), digest: jest.fn().mockReturnValue(newTokenHash) });
+            
+            RefreshToken.deleteOne.mockResolvedValue({ deletedCount: 1 });
+            RefreshToken.create.mockResolvedValue({});
+
+            const result = await tokenService.rotateRefreshToken(oldToken, mockUser._id);
+
+            expect(RefreshToken.deleteOne).toHaveBeenCalledWith({ tokenHash: oldTokenHash });
+            expect(crypto.randomBytes).toHaveBeenCalled();
+            expect(RefreshToken.create).toHaveBeenCalledWith(expect.objectContaining({
+                user: mockUser._id,
+                tokenHash: newTokenHash,
+            }));
+            expect(result).toBe(newToken);
+        });
+    });
+});
+</file>
+
+<file path="messaging-service/package.json">
+{
+  "name": "messaging-service",
+  "version": "1.0.0",
+  "description": "Real-time socket service with Redis Pub/Sub integration",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
+  "keywords": [
+    "socket.io",
+    "redis",
+    "nodejs",
+    "realtime"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "redis": "^4.6.10",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.1",
+    "socket.io-client": "^4.7.2"
+  },
+  "jest": {
+    "testEnvironment": "node"
+  }
+}
 </file>
 
 <file path="api-service/controllers/user.controller.js">
@@ -1256,41 +2517,137 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 </file>
 
-<file path="api-service/models/Message.js">
-const mongoose = require('mongoose');
+<file path="api-service/routes/auth.routes.js">
+const express = require('express');
+const bcrypt = require('bcrypt');
+const crypto = require('crypto');
+const User = require('../models/User');
+const RefreshToken = require('../models/RefreshToken');
+const {
+    generateAccessToken,
+    createRefreshToken,
+    rotateRefreshToken,
+} = require('../services/token.service');
 
-const MessageSchema = new mongoose.Schema({
-    channel: { type: mongoose.Schema.Types.ObjectId, ref: 'Channel', required: true },
-    server: { type: mongoose.Schema.Types.ObjectId, ref: 'Server', required: true },
-    author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+const router = express.Router();
 
-    // The Alias: If present, the UI should show the character name/icon instead of the user
-    character: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Character',
-        default: null
-    },
+function getRefreshCookieOptions() {
+    const isProduction = process.env.NODE_ENV === 'production';
 
-    content: { type: String, required: true },
-    attachments: [{
-        url: String,
-        name: String,
-        contentType: String
-    }],
-    reactions: [{
-        emoji: String,
-        users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
-    }],
-    replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
-    
-    // Whisper functionality
-    isWhisper: { type: Boolean, default: false },
-    recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    return {
+        httpOnly: true,
+        sameSite: isProduction ? 'none' : 'lax',
+        secure: isProduction,
+        path: '/',
+    };
+}
 
-    createdAt: { type: Date, default: Date.now }
+/**
+ * REGISTER
+ */
+router.post('/register', async (req, res) => {
+    try {
+        const { username, email, password } = req.body;
+
+        if (!username || !email || !password) {
+            return res.status(400).json({ message: 'All fields are required' });
+        }
+
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(409).json({ message: 'Email already in use' });
+        }
+
+        const hashed = await bcrypt.hash(password, 12);
+        const user = await User.create({ username, email, password: hashed });
+
+        res.status(201).json({ id: user._id, message: 'User created successfully' });
+    } catch (error) {
+        console.error('Registration Error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
 });
 
-module.exports = mongoose.model('Message', MessageSchema);
+/**
+ * LOGIN
+ */
+router.post('/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        const user = await User.findOne({ email });
+        if (!user) return res.sendStatus(401);
+
+        const valid = await bcrypt.compare(password, user.password);
+        if (!valid) return res.sendStatus(401);
+
+        const accessToken = generateAccessToken(user);
+        const refreshToken = await createRefreshToken(user._id);
+
+        res
+            .cookie('refreshToken', refreshToken, getRefreshCookieOptions())
+            .json({ accessToken });
+    } catch (error) {
+        console.error('Login Error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+router.post('/refresh', async (req, res) => {
+    try {
+        const oldToken = req.cookies.refreshToken;
+        if (!oldToken) return res.sendStatus(401);
+
+        const oldHash = crypto
+            .createHash('sha256')
+            .update(oldToken)
+            .digest('hex');
+
+        const stored = await RefreshToken.findOne({ tokenHash: oldHash }).populate('user');
+
+        if (!stored || stored.expiresAt < Date.now()) {
+            if (stored) {
+                await RefreshToken.deleteOne({ tokenHash: oldHash });
+            }
+            return res.status(403).json({ message: 'Refresh Token Aged Out' });
+        }
+
+        const newRefreshToken = await rotateRefreshToken(
+            oldToken,
+            stored.user._id
+        );
+
+        const accessToken = generateAccessToken(stored.user);
+
+        res
+            .cookie('refreshToken', newRefreshToken, getRefreshCookieOptions())
+            .json({ accessToken });
+    } catch (error) {
+        console.error('Refresh Error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+/**
+ * LOGOUT
+ */
+router.post('/logout', async (req, res) => {
+    try {
+        const token = req.cookies.refreshToken;
+
+        if (token) {
+            const hash = crypto.createHash('sha256').update(token).digest('hex');
+            await RefreshToken.deleteOne({ tokenHash: hash });
+        }
+
+        res.clearCookie('refreshToken', getRefreshCookieOptions()).sendStatus(204);
+    } catch (error) {
+        console.error('Logout Error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+module.exports = router;
 </file>
 
 <file path="api-service/routes/files.routes.js">
@@ -1366,6 +2723,143 @@ router.post("/whisper/create", auth, getOrCreateWhisperChannel);
 module.exports = router;
 </file>
 
+<file path="api-service/tests/services/s3.service.test.js">
+const s3Service = require('../../services/s3.service');
+const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { Upload } = require("@aws-sdk/lib-storage");
+
+jest.mock("@aws-sdk/client-s3");
+jest.mock("@aws-sdk/lib-storage");
+jest.mock("crypto", () => ({
+    ...jest.requireActual("crypto"),
+    randomUUID: jest.fn().mockReturnValue('mock-uuid'),
+}));
+
+describe('S3 Service', () => {
+    const mockBucketName = 'test-bucket';
+    const mockRegion = 'us-east-1';
+
+    beforeAll(() => {
+        process.env.AWS_BUCKET_NAME = mockBucketName;
+        process.env.AWS_REGION = mockRegion;
+    });
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        jest.spyOn(console, 'log').mockImplementation(() => {});
+        S3Client.mockImplementation(() => ({
+            send: jest.fn()
+        }));
+        s3Service.__resetS3ClientForTests();
+    });
+
+    afterEach(() => {
+        console.log.mockRestore();
+    });
+
+    describe('sanitizeFilename', () => {
+        it('sanitizes invalid path characters', () => {
+            expect(s3Service.sanitizeFilename('folder\\bad:name?.png')).toBe('bad_name_.png');
+        });
+    });
+
+    describe('normalizeStoredFileValue', () => {
+        it('extracts the key from relative api file paths', () => {
+            expect(s3Service.normalizeStoredFileValue('/api/files/test-key.png')).toBe('test-key.png');
+        });
+
+        it('extracts the key from absolute api file URLs', () => {
+            expect(s3Service.normalizeStoredFileValue('http://localhost/api/files/test-key.png')).toBe('test-key.png');
+        });
+
+        it('preserves non-platform URLs', () => {
+            expect(s3Service.normalizeStoredFileValue('https://cdn.example.com/icon.png')).toBe('https://cdn.example.com/icon.png');
+        });
+    });
+
+    describe('uploadToS3', () => {
+        it('should upload a file and return its metadata', async () => {
+            const mockBuffer = Buffer.from('test');
+            const mockFilename = 'test.jpg';
+            const mockContentType = 'image/jpeg';
+            const mockUploadDone = jest.fn().mockResolvedValue({});
+            
+            Upload.mockImplementation(() => ({
+                done: mockUploadDone
+            }));
+
+            const result = await s3Service.uploadToS3(mockBuffer, mockFilename, mockContentType);
+
+            expect(Upload).toHaveBeenCalledWith(expect.objectContaining({
+                params: expect.objectContaining({
+                    Bucket: mockBucketName,
+                    Key: `mock-uuid-${mockFilename}`,
+                    Body: mockBuffer,
+                    ContentType: mockContentType,
+                })
+            }));
+            expect(mockUploadDone).toHaveBeenCalled();
+            expect(result).toEqual({
+                id: 'mock-uuid',
+                key: `mock-uuid-${mockFilename}`,
+                contentType: mockContentType,
+                filename: mockFilename,
+                name: mockFilename,
+            });
+        });
+    });
+
+    describe('getObjectStream', () => {
+        it('should return a stream for a given key', async () => {
+            const mockKey = 'some-key';
+            const mockStream = { pipe: jest.fn() };
+            const mockResponse = {
+                Body: mockStream,
+                ContentType: 'image/jpeg',
+                ContentLength: 1024,
+            };
+
+            const mockSend = jest.fn().mockResolvedValue(mockResponse);
+            S3Client.mockImplementation(() => ({ send: mockSend }));
+            s3Service.__resetS3ClientForTests();
+
+            const result = await s3Service.getObjectStream(mockKey);
+
+            expect(GetObjectCommand).toHaveBeenCalledWith({
+                Bucket: mockBucketName,
+                Key: mockKey,
+            });
+            expect(mockSend).toHaveBeenCalledWith(expect.any(GetObjectCommand));
+            expect(result).toEqual({
+                stream: mockStream,
+                contentType: 'image/jpeg',
+                contentLength: 1024,
+            });
+        });
+
+        it('normalizes legacy api file URLs before fetching', async () => {
+            const mockStream = { pipe: jest.fn() };
+            const mockResponse = {
+                Body: mockStream,
+                ContentType: 'image/jpeg',
+                ContentLength: 1024,
+            };
+
+            const mockSend = jest.fn().mockResolvedValue(mockResponse);
+            S3Client.mockImplementation(() => ({ send: mockSend }));
+            s3Service.__resetS3ClientForTests();
+
+            await s3Service.getObjectStream('http://localhost/api/files/legacy-key.jpg');
+
+            expect(GetObjectCommand).toHaveBeenCalledWith({
+                Bucket: mockBucketName,
+                Key: 'legacy-key.jpg',
+            });
+        });
+    });
+});
+</file>
+
 <file path="map-service/Dockerfile">
 FROM node:20-slim
 
@@ -1379,6 +2873,39 @@ RUN npm install
 COPY . .
 EXPOSE 3003
 CMD ["node", "index.js"]
+</file>
+
+<file path="map-service/package.json">
+{
+  "name": "map-service",
+  "version": "1.0.0",
+  "description": "Real-time map sync service for VTT",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
+  "keywords": [
+    "socket.io",
+    "vtt",
+    "realtime"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "redis": "^4.6.10",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.1",
+    "socket.io-client": "^4.7.2"
+  },
+  "jest": {
+    "testEnvironment": "node"
+  }
+}
 </file>
 
 <file path="messaging-service/Dockerfile">
@@ -1396,6 +2923,172 @@ EXPOSE 3001
 CMD ["node", "index.js"]
 </file>
 
+<file path=".gitignore">
+.env.development
+.env.production
+.env
+./.env
+
+
+.env
+node_modules
+./node_modules
+</file>
+
+<file path="api-service/models/Message.js">
+const mongoose = require('mongoose');
+
+const MessageSchema = new mongoose.Schema({
+    channel: { type: mongoose.Schema.Types.ObjectId, ref: 'Channel', required: true },
+    server: { type: mongoose.Schema.Types.ObjectId, ref: 'Server', required: true },
+    author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+
+    // The Alias: If present, the UI should show the character name/icon instead of the user
+    character: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Character',
+        default: null
+    },
+
+    content: { type: String, required: true },
+    attachments: [{
+        id: String,
+        key: String,
+        url: String,
+        name: String,
+        filename: String,
+        contentType: String
+    }],
+    reactions: [{
+        emoji: String,
+        users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
+    }],
+    replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+    
+    // Whisper functionality
+    isWhisper: { type: Boolean, default: false },
+    recipient: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
+    createdAt: { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Message', MessageSchema);
+</file>
+
+<file path="api-service/services/s3.service.js">
+const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { Upload } = require("@aws-sdk/lib-storage");
+const crypto = require("crypto");
+const path = require("path");
+
+let s3Client;
+
+function getS3Client() {
+    if (!s3Client) {
+        s3Client = new S3Client({
+            region: process.env.AWS_REGION,
+            credentials: {
+                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+            },
+        });
+    }
+
+    return s3Client;
+}
+
+function sanitizeFilename(filename) {
+    const fallbackName = 'file';
+    const baseName = path.basename(filename || fallbackName).trim();
+    const sanitizedName = baseName
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return sanitizedName || fallbackName;
+}
+
+function normalizeStoredFileValue(value) {
+    if (!value || typeof value !== 'string') {
+        return value;
+    }
+
+    if (value.startsWith('/api/files/')) {
+        return value.slice('/api/files/'.length);
+    }
+
+    if (/^https?:\/\//i.test(value)) {
+        try {
+            const parsed = new URL(value);
+            if (parsed.pathname.startsWith('/api/files/')) {
+                return parsed.pathname.slice('/api/files/'.length);
+            }
+        } catch {
+            return value;
+        }
+    }
+
+    return value;
+}
+
+function resetS3ClientForTests() {
+    s3Client = undefined;
+}
+
+exports.sanitizeFilename = sanitizeFilename;
+exports.normalizeStoredFileValue = normalizeStoredFileValue;
+exports.__resetS3ClientForTests = resetS3ClientForTests;
+
+/**
+ * Uploads a buffer or stream to S3.
+ */
+exports.uploadToS3 = async (buffer, filename, contentType) => {
+    const fileId = crypto.randomUUID();
+    const safeFilename = sanitizeFilename(filename);
+    const key = `${fileId}-${safeFilename}`;
+
+    console.log(`[S3Service] Uploading to S3: ${key} (${contentType || 'application/octet-stream'})`);
+
+    const parallelUploads3 = new Upload({
+        client: getS3Client(),
+        params: {
+            Bucket: process.env.AWS_BUCKET_NAME,
+            Key: key,
+            Body: buffer,
+            ContentType: contentType || 'application/octet-stream'
+        },
+    });
+
+    await parallelUploads3.done();
+
+    return {
+        id: fileId,
+        key,
+        filename: safeFilename,
+        name: safeFilename,
+        contentType: contentType || 'application/octet-stream'
+    };
+};
+
+/**
+ * Fetches an object stream from S3.
+ */
+exports.getObjectStream = async (key) => {
+    const normalizedKey = normalizeStoredFileValue(key);
+    const command = new GetObjectCommand({
+        Bucket: process.env.AWS_BUCKET_NAME,
+        Key: normalizedKey,
+    });
+
+    const response = await getS3Client().send(command);
+    return {
+        stream: response.Body,
+        contentType: response.ContentType,
+        contentLength: response.ContentLength
+    };
+};
+</file>
+
 <file path="api-service/package.json">
 {
   "name": "d-dplatform-backend",
@@ -1403,7 +3096,7 @@ CMD ["node", "index.js"]
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
     "dev": "nodemon server.js"
   },
   "repository": {
@@ -1439,13 +3132,23 @@ CMD ["node", "index.js"]
     "uuid": "^13.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.11"
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.11",
+    "supertest": "^7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node"
   }
 }
 </file>
 
 <file path="map-service/index.js">
-const io = require('socket.io')(3003, {
+const http = require('http');
+const { Server } = require('socket.io');
+const { createClient } = require('redis');
+
+const server = http.createServer();
+const io = new Server(server, {
     path: '/map/',
     cors: { origin: true },
     transports: ['websocket'],
@@ -1453,7 +3156,6 @@ const io = require('socket.io')(3003, {
     maxHttpBufferSize: 5e7
 });
 
-const { createClient } = require('redis');
 const redisClient = createClient({
     url: process.env.REDIS_URL || 'redis://redis:6379',
     socket: {
@@ -1467,7 +3169,11 @@ const redisClient = createClient({
     }
 });
 
-redisClient.on('error', err => console.error('Redis Error:', err));
+redisClient.on('error', err => {
+    if (process.env.NODE_ENV !== 'test') {
+        console.error('Redis Error:', err);
+    }
+});
 
 class RoomQueue {
     constructor() { this.queue = Promise.resolve(); }
@@ -1482,17 +3188,45 @@ const runInQueue = (roomId, task) => {
     return roomQueues.get(roomId).add(task);
 };
 
-async function startServer() {
-    try {
-        await redisClient.connect();
-        console.log('Connected to Redis for Room Persistence');
-    } catch (err) {
-        console.error("Redis initial connection failed, retrying in background...", err);
-    }
-
-    const debug = (msg, data = '') => {
+const debug = (msg, data = '') => {
+    if (process.env.NODE_ENV !== 'test') {
         console.log(`[${new Date().toLocaleTimeString()}] ${msg}`, data);
-    };
+    }
+};
+
+async function checkAndCleanupRoom(roomId, socketId, isDisconnectingEvent = false, client = redisClient) {
+    const room = io.sockets.adapter.rooms.get(roomId);
+    const userCount = room ? room.size : 0;
+    const isEmpty = isDisconnectingEvent ? userCount <= 1 : userCount === 0;
+
+    if (isEmpty) {
+        debug(`Room ${roomId} is empty. Cleaning up state.`);
+        await client.del(`room:${roomId}`);
+        await client.del(`room:${roomId}:host`);
+        roomQueues.delete(roomId);
+    } else {
+        const hostKey = `room:${roomId}:host`;
+        const currentHostId = await client.get(hostKey);
+
+        if (currentHostId === socketId) {
+            debug(`Host left room ${roomId}. Reassigning or waiting for new host.`);
+            io.to(roomId).emit('host-disconnected');
+            await client.del(hostKey);
+        }
+    }
+}
+
+async function start(client = redisClient) {
+    try {
+        if (!client.isOpen) {
+            await client.connect();
+        }
+        debug('Connected to Redis for Room Persistence');
+    } catch (err) {
+        if (process.env.NODE_ENV !== 'test') {
+            console.error("Redis initial connection failed, retrying in background...", err);
+        }
+    }
 
     io.on('connection', (socket) => {
         debug(`New Connection: ${socket.id}`);
@@ -1501,14 +3235,14 @@ async function startServer() {
             debug(`HOST REQUEST for Room: ${roomId}`);
             socket.join(roomId);
 
-            if (!redisClient.isOpen) {
+            if (!client.isOpen) {
                 socket.emit('error', 'Server not ready: Redis connection lost.');
                 return;
             }
 
-            await redisClient.set(`room:${roomId}:host`, socket.id, { EX: 86400 });
+            await client.set(`room:${roomId}:host`, socket.id, { EX: 86400 });
 
-            const existingState = await redisClient.get(`room:${roomId}`);
+            const existingState = await client.get(`room:${roomId}`);
             if (existingState && !initialState) {
                 try {
                     socket.emit('map-update', JSON.parse(existingState));
@@ -1518,7 +3252,7 @@ async function startServer() {
             } else {
                 const state = initialState || { tokens: [], walls: [], gridSize: 50 };
                 state.version = 0;
-                await redisClient.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
+                await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
             }
 
             socket.to(roomId).emit('host-changed', { hostId: socket.id });
@@ -1527,19 +3261,19 @@ async function startServer() {
         socket.on('join-session', async ({ roomId, character }) => {
             debug(`JOIN ATTEMPT: ${socket.id} for Room ${roomId}`);
 
-            if (!redisClient.isOpen) {
+            if (!client.isOpen) {
                 socket.emit('error', 'Server not ready: Redis connection lost.');
                 return;
             }
 
-            let stateRaw = await redisClient.get(`room:${roomId}`);
+            let stateRaw = await client.get(`room:${roomId}`);
             if (stateRaw) {
                 try {
                     let state = JSON.parse(stateRaw);
                     socket.join(roomId);
                     socket.emit('map-update', state);
 
-                    const currentHost = await redisClient.get(`room:${roomId}:host`);
+                    const currentHost = await client.get(`room:${roomId}:host`);
                     socket.emit('host-changed', { hostId: currentHost });
                 } catch (e) {
                     socket.emit('error', 'Room state is corrupted.');
@@ -1549,23 +3283,21 @@ async function startServer() {
             }
         });
 
-        // ROBUSTNESS FIX 2: Added stop-hosting and leave-session handlers
         socket.on('stop-hosting', async (roomId) => {
-            await redisClient.del(`room:${roomId}:host`);
+            await client.del(`room:${roomId}:host`);
             socket.to(roomId).emit('host-disconnected');
         });
 
         socket.on('leave-session', async (roomId) => {
             socket.leave(roomId);
-            await checkAndCleanupRoom(roomId, socket.id);
+            await checkAndCleanupRoom(roomId, socket.id, false, client);
         });
 
         socket.on('sync-action', ({ roomId, action, data }) => {
-            // Push action to the room's execution queue
             runInQueue(roomId, async () => {
-                if (!redisClient.isOpen) return;
+                if (!client.isOpen) return;
 
-                const stateRaw = await redisClient.get(`room:${roomId}`);
+                const stateRaw = await client.get(`room:${roomId}`);
                 if (!stateRaw) return;
 
                 let state;
@@ -1575,7 +3307,6 @@ async function startServer() {
 
                 state.version = (state.version || 0) + 1;
 
-                // Update state based on action
                 switch(action) {
                     case 'token-move':
                         if (Array.isArray(state.tokens)) {
@@ -1609,7 +3340,7 @@ async function startServer() {
                         break;
                     case 'token-deleted':
                         if (state.tokens) {
-                            state.tokens = state.tokens.filter(t => t.id === data.id);
+                            state.tokens = state.tokens.filter(t => t.id !== data.id);
                         }
                         break;
                     case 'token-update':
@@ -1657,14 +3388,14 @@ async function startServer() {
                         break;
                 }
 
-                await redisClient.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
+                await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
                 io.to(roomId).emit('remote-action', { action, data, version: state.version });
             });
         });
 
         socket.on('request-resync', async (roomId) => {
-            if (!redisClient.isOpen) return;
-            const stateRaw = await redisClient.get(`room:${roomId}`);
+            if (!client.isOpen) return;
+            const stateRaw = await client.get(`room:${roomId}`);
             if (stateRaw) {
                 try {
                     socket.emit('map-update', JSON.parse(stateRaw));
@@ -1672,47 +3403,131 @@ async function startServer() {
             }
         });
 
-        // ROBUSTNESS FIX 3: Use 'disconnecting' so we can see which rooms the user is still in.
         socket.on('disconnecting', async () => {
             debug(`Disconnecting: ${socket.id}`);
             for (const roomId of socket.rooms) {
                 if (roomId === socket.id) continue;
-                await checkAndCleanupRoom(roomId, socket.id, true);
+                await checkAndCleanupRoom(roomId, socket.id, true, client);
             }
         });
     });
-
-    // Helper to evaluate room state and clean up Redis
-    async function checkAndCleanupRoom(roomId, socketId, isDisconnectingEvent = false) {
-        const room = io.sockets.adapter.rooms.get(roomId);
-
-        // If we are evaluating during a "disconnecting" event, the user is still technically in the adapter size.
-        // Therefore, if size is 1, they are the last person. Otherwise, 0 means it's empty.
-        const userCount = room ? room.size : 0;
-        const isEmpty = isDisconnectingEvent ? userCount <= 1 : userCount === 0;
-
-        if (isEmpty) {
-            debug(`Room ${roomId} is empty. Cleaning up state.`);
-            await redisClient.del(`room:${roomId}`);
-            await redisClient.del(`room:${roomId}:host`);
-            roomQueues.delete(roomId); // Prevent memory leak in queue map
-        } else {
-            // The room isn't empty, but let's check if the person leaving was the host
-            const hostKey = `room:${roomId}:host`;
-            const currentHostId = await redisClient.get(hostKey);
-
-            if (currentHostId === socketId) {
-                debug(`Host left room ${roomId}. Reassigning or waiting for new host.`);
-                io.to(roomId).emit('host-disconnected');
-                await redisClient.del(hostKey);
-            }
-        }
-    }
-
-    console.log('VTT Sync Server running on port 3003');
 }
 
-startServer();
+const shutdown = async () => {
+    return new Promise((resolve) => {
+        io.close(() => {
+            if (redisClient.isOpen) {
+                redisClient.quit().then(() => {
+                    server.close(() => {
+                        resolve();
+                    });
+                });
+            } else {
+                server.close(() => {
+                    resolve();
+                });
+            }
+        });
+    });
+};
+
+if (require.main === module) {
+    const PORT = process.env.PORT || 3003;
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`VTT Sync Server running on port ${PORT}`);
+    });
+    start();
+}
+
+module.exports = {
+    server,
+    io,
+    redisClient,
+    start,
+    shutdown
+};
+</file>
+
+<file path="nginx.local.conf">
+events {
+    worker_connections 1024;
+}
+
+http {
+    resolver 127.0.0.11 valid=30s;
+    client_max_body_size 50M;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+
+    server {
+        listen 80;
+        server_name localhost;
+
+        # Standard API
+        location /api/ {
+            proxy_pass http://api-service:3000/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 300s;
+        }
+
+        # Messaging Service
+        location /socket.io/ {
+            proxy_pass http://messaging-service:3001;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_cache_bypass $http_upgrade;
+        }
+
+        # Map Service
+        location /map/ {
+            proxy_pass http://map-service:3003;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+        }
+
+        # LiveKit Signaling and RTC
+        location /livekit/ {
+            # CORS headers - 'always' ensures they are sent even on 502 errors
+            add_header 'Access-Control-Allow-Origin' 'http://localhost:4200' always;
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+            add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Range' always;
+            add_header 'Access-Control-Allow-Credentials' 'true' always;
+
+            if ($request_method = 'OPTIONS') {
+                add_header 'Access-Control-Allow-Origin' 'http://localhost:4200' always;
+                add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+                add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Range' always;
+                add_header 'Access-Control-Allow-Credentials' 'true' always;
+                add_header 'Content-Length' 0;
+                add_header 'Content-Type' 'text/plain; charset=utf-8';
+                return 204;
+            }
+
+            rewrite ^/livekit/(.*) /$1 break;
+            proxy_pass http://host.docker.internal:7880;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            proxy_buffering off;
+            proxy_read_timeout 86400s;
+        }
+    }
+}
 </file>
 
 <file path="api-service/controllers/character.controller.js">
@@ -1743,15 +3558,29 @@ publisher.connect().catch(err => console.error('Redis Publisher initial connect 
 function getFileFullUrl(req, key) {
     if (!key) return null;
     if (key.startsWith('http')) return key;
+    if (key.startsWith('/api/files/')) {
+        return `${req.protocol}://${req.get('host')}${key}`;
+    }
     return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function normalizeStoredFileValue(value) {
+    if (!value || typeof value !== 'string') return value;
+    return s3Service.normalizeStoredFileValue(value);
 }
 
 function processCharacterUrls(req, character) {
     if (character.icon) {
-        character.iconUrl = getFileFullUrl(req, character.icon);
+        const storedIcon = normalizeStoredFileValue(character.icon);
+        character.iconKey = storedIcon;
+        character.icon = getFileFullUrl(req, storedIcon);
+        character.iconUrl = getFileFullUrl(req, storedIcon);
     }
     if (character.pdfLink) {
-        character.pdfLinkUrl = getFileFullUrl(req, character.pdfLink);
+        const storedPdf = normalizeStoredFileValue(character.pdfLink);
+        character.pdfKey = storedPdf;
+        character.pdfLink = getFileFullUrl(req, storedPdf);
+        character.pdfLinkUrl = getFileFullUrl(req, storedPdf);
     }
 }
 
@@ -1772,7 +3601,7 @@ async function notifyCharacterUpdate(req, serverId, character) {
     }
 }
 
-async function handleFileUpload(file, req) {
+async function handleFileUpload(file) {
     let fileBuffer = file.buffer;
     let contentType = file.mimetype;
     let filename = file.originalname;
@@ -1804,15 +3633,15 @@ exports.createCharacter = async (req, res) => {
     try {
         const charData = req.body;
         const userId = req.user.id;
-        let iconKey = charData.icon;
-        let pdfKey = charData.pdfLink;
+        let iconKey = normalizeStoredFileValue(charData.icon);
+        let pdfKey = normalizeStoredFileValue(charData.pdfLink);
 
         if (req.files) {
             if (req.files.icon) {
-                iconKey = await handleFileUpload(req.files.icon[0], req);
+                iconKey = await handleFileUpload(req.files.icon[0]);
             }
             if (req.files.pdf) {
-                pdfKey = await handleFileUpload(req.files.pdf[0], req);
+                pdfKey = await handleFileUpload(req.files.pdf[0]);
             }
         }
 
@@ -1825,8 +3654,9 @@ exports.createCharacter = async (req, res) => {
             ownerId: userId,
             name: charData.name,
             race: charData.race,
-            icon: iconKey,
+            icon: iconKey || null,
             ddbId: charData.ddbId || null,
+            ddbUsername: charData.ddbUsername || null,
             pdfLink: pdfKey || null,
             baseStats: typeof charData.baseStats === 'string'
                 ? JSON.parse(charData.baseStats) : charData.baseStats,
@@ -1872,7 +3702,7 @@ exports.updateCharacter = async (req, res) => {
             return res.status(404).json({ message: "Character not found or unauthorized." });
         }
 
-        const fields = ['name', 'race', 'ddbId', "ddbUsername", 'ac'];
+        const fields = ['name', 'race', 'ddbId', 'ddbUsername', 'ac'];
         fields.forEach(field => {
             if (charData[field] !== undefined) updateFields[field] = charData[field];
         });
@@ -1884,6 +3714,12 @@ exports.updateCharacter = async (req, res) => {
         if (charData.classes) {
             updateFields.classes = typeof charData.classes === 'string'
                 ? JSON.parse(charData.classes) : charData.classes;
+        }
+        if (charData.icon !== undefined) {
+            updateFields.icon = normalizeStoredFileValue(charData.icon) || null;
+        }
+        if (charData.pdfLink !== undefined) {
+            updateFields.pdfLink = normalizeStoredFileValue(charData.pdfLink) || null;
         }
         
         let serversChanged = false;
@@ -1898,10 +3734,10 @@ exports.updateCharacter = async (req, res) => {
 
         if (req.files) {
             if (req.files.icon) {
-                updateFields.icon = await handleFileUpload(req.files.icon[0], req);
+                updateFields.icon = await handleFileUpload(req.files.icon[0]);
             }
             if (req.files.pdf) {
-                updateFields.pdfLink = await handleFileUpload(req.files.pdf[0], req);
+                updateFields.pdfLink = await handleFileUpload(req.files.pdf[0]);
             }
         }
 
@@ -1918,14 +3754,12 @@ exports.updateCharacter = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        // Notify current servers
         if (updatedCharacter.servers && updatedCharacter.servers.length > 0) {
             for (const serverId of updatedCharacter.servers) {
                 await notifyCharacterUpdate(req, serverId, updatedCharacter);
             }
         }
 
-        // Notify removed servers
         if (serversChanged) {
             const newServerIds = updatedCharacter.servers.map(s => s.toString());
             for (const oldServerId of oldServers) {
@@ -1997,271 +3831,357 @@ exports.deleteCharacter = async (req, res) => {
 };
 </file>
 
-<file path="api-service/controllers/message.controller.js">
-const Message = require("../models/Message");
-const Channel = require("../models/Channel");
-const Server = require("../models/Server");
-const Role = require("../models/Roles");
-const Character = require("../models/Character");
-const redis = require('redis');
+<file path="api-service/server.js">
+const path = require('path');
+const mongoose = require('mongoose');
+const http = require('http');
 
-const publisher = redis.createClient({ 
-    url: process.env.REDIS_URL || 'redis://redis:6379',
-    socket: {
-        reconnectStrategy: (retries) => {
-            if (retries > 20) {
-                console.error('Redis Publisher: Max retries reached, giving up.');
-                return new Error('Redis connection failed');
-            }
-            return Math.min(retries * 100, 3000);
-        }
-    }
+require('dotenv').config();
+const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
+require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
+
+const app = require('./app');
+
+const server = http.createServer(app);
+
+const mongooseOptions = {
+    serverSelectionTimeoutMS: 30000,
+    socketTimeoutMS: 45000,
+    family: 4
+};
+
+const dbUri = process.env.MONGO_URI || 'mongodb://localhost:27017/your_db';
+
+mongoose.connect(dbUri, mongooseOptions)
+    .then(() => console.log(`Connected to MongoDB`))
+    .catch(err => {
+        console.error('MongoDB connection error:', err);
+        process.exit(1);
+    });
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`API Service running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
 });
 
-publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
-publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
-
-function getFileFullUrl(req, key) {
-    if (!key) return null;
-    if (key.startsWith('http')) return key;
-    return `${req.protocol}://${req.get('host')}/api/files/${key}`;
-}
-
-function processIconUrls(req, message) {
-    if (message.author && message.author.profileIcon) {
-        message.author.profileIconUrl = getFileFullUrl(req, message.author.profileIcon);
-    }
-    if (message.recipient && message.recipient.profileIcon) {
-        message.recipient.profileIconUrl = getFileFullUrl(req, message.recipient.profileIcon);
-    }
-    if (message.character && message.character.icon) {
-        message.character.iconUrl = getFileFullUrl(req, message.character.icon);
-    }
-    if (message.replyTo) {
-        if (message.replyTo.author && message.replyTo.author.profileIcon) {
-            message.replyTo.author.profileIconUrl = getFileFullUrl(req, message.replyTo.author.profileIcon);
-        }
-        if (message.replyTo.character && message.replyTo.character.icon) {
-            message.replyTo.character.iconUrl = getFileFullUrl(req, message.replyTo.character.icon);
-        }
-    }
-}
-
-/* ===== PERMISSIONS ===== */
-
-const canPerformAction = async (serverId, userId, channel, permissionName) => {
-    const server = await Server.findById(serverId);
-    if (!server) return false;
-
-    if (server.owner.toString() === userId) return true;
-
-    const member = server.members.find(m => m.user.toString() === userId);
-    if (!member) return false;
-
-    const memberRoles = await Role.find({ _id: { $in: member.roles } });
-
-    if (memberRoles.some(r => r.permissions.ADMINISTRATOR)) return true;
-
-    const roleIds = member.roles.map(id => id.toString());
-    const overwrites = channel.permissionOverwrites.filter(ow =>
-        roleIds.includes(ow.role.toString())
-    );
-
-    if (overwrites.some(ow => ow.deny.includes(permissionName))) return false;
-    if (overwrites.some(ow => ow.allow.includes(permissionName))) return true;
-
-    return memberRoles.some(r => r.permissions[permissionName] === true);
+let worker;
+const gracefulShutdown = () => {
+    console.log('Shutting down gracefully...');
+    server.close(() => {
+        console.log('HTTP server closed.');
+        if (worker) worker.close();
+        process.exit(0);
+    });
 };
 
-/* ===== SEND MESSAGE ===== */
-exports.sendMessage = async (req, res) => {
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+</file>
+
+<file path="api-service/tests/services/gridfs.service.test.js">
+// Mock mongoose
+jest.mock("mongoose", () => ({
+    connection: {
+        once: jest.fn(),
+        db: { some: 'db' }
+    }
+}));
+
+// Mock mongodb
+jest.mock("mongodb", () => ({
+    GridFSBucket: jest.fn()
+}));
+
+describe('GridFS Service', () => {
+    let gridfsService;
+    let mongoose;
+    let mongodb;
+
+    beforeEach(() => {
+        jest.resetModules();
+        mongoose = require("mongoose");
+        mongodb = require("mongodb");
+        jest.clearAllMocks();
+    });
+
+    it('should initialize bucket when mongoose connection opens', () => {
+        // Require the service
+        gridfsService = require('../../services/gridfs.service');
+
+        // Find the callback passed to mongoose.connection.once('open', ...)
+        const openCall = mongoose.connection.once.mock.calls.find(call => call[0] === 'open');
+        if (!openCall) {
+            throw new Error("open callback not found. Service might not be calling mongoose.connection.once('open', ...)");
+        }
+        const openCallback = openCall[1];
+
+        const mockBucketInstance = { name: 'mockBucket' };
+        mongodb.GridFSBucket.mockImplementation(() => mockBucketInstance);
+
+        // Manually trigger the captured callback
+        openCallback();
+
+        expect(mongodb.GridFSBucket).toHaveBeenCalledWith(mongoose.connection.db, {
+            bucketName: "uploads",
+        });
+        expect(gridfsService()).toBe(mockBucketInstance);
+    });
+
+    it('should return undefined if bucket is not yet initialized', () => {
+        gridfsService = require('../../services/gridfs.service');
+        expect(gridfsService()).toBeUndefined();
+    });
+});
+</file>
+
+<file path=".github/workflows/main.yml">
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api-service, messaging-service, map-service]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ./${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: ./${{ matrix.service }}
+
+      - name: Run tests
+        run: npm test
+        working-directory: ./${{ matrix.service }}
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api-service, messaging-service, map-service]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/d-dplatform-${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.service }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+</file>
+
+<file path="api-service/controllers/files.controller.js">
+const s3Service = require('../services/s3.service');
+const sharp = require('sharp');
+const fs = require('fs-extra');
+const path = require('path');
+const os = require('os');
+
+const TEMP_DIR = path.join(os.tmpdir(), 'd-dplatform-uploads');
+const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
+
+/**
+ * Proxy S3 file through API:
+ * GET /api/files/:id
+ * (Here :id is the full S3 key, e.g. uuid-filename.ext)
+ */
+exports.getFile = async (req, res) => {
     try {
-        const userId = req.user.id;
-        const { channelId } = req.params;
-        const { content, characterId, attachments, replyTo, isWhisper, recipientId } = req.body;
+        const key = req.params.id; 
+        
+        console.log(`[FilesController] Proxying request for S3 key: ${key}`);
+        const { stream, contentType, contentLength } = await s3Service.getObjectStream(key);
 
-        const channel = await Channel.findById(channelId);
-        if (!channel) return res.status(404).json({ message: "Channel not found" });
-
-        const canSend = await canPerformAction(
-            channel.server,
-            userId,
-            channel,
-            "SEND_MESSAGES"
-        );
-        if (!canSend) return res.status(403).json({ message: "Permission denied" });
-
-        if (characterId) {
-            const character = await Character.findOne({
-                _id: characterId,
-                ownerId: userId
-            });
-            if (!character) return res.status(403).json({ message: "Invalid character" });
+        if (!stream) {
+            return res.status(404).json({ message: "File not found in S3" });
         }
 
-        const messageData = {
-            channel: channelId,
-            server: channel.server,
-            author: userId,
-            character: characterId || null,
-            content,
-            attachments: attachments || [],
-            replyTo: replyTo || null,
-            isWhisper: isWhisper || false,
-            recipient: recipientId || null
-        };
+        res.set('Content-Type', contentType);
+        if (contentLength) res.set('Content-Length', contentLength);
+        
+        // Use Content-Disposition inline for viewing in browser, with filename if possible
+        const filename = key.split('-').slice(1).join('-') || 'file';
+        res.set('Content-Disposition', `inline; filename="${filename}"`);
 
-        const message = await Message.create(messageData);
-
-        await message.populate([
-            { path: "author", select: "username avatar profileIcon" },
-            { path: "character", select: "name icon" },
-            { 
-                path: "replyTo", 
-                populate: [
-                    { path: "author", select: "username avatar profileIcon" },
-                    { path: "character", select: "name icon" }
-                ]
-            },
-            { path: "recipient", select: "username avatar profileIcon" }
-        ]);
-
-        const payload = message.toObject();
-        payload.channelId = channelId;
-        processIconUrls(req, payload);
-
-        if (publisher.isOpen) {
-            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ type: 'NEW_MESSAGE', data: payload }));
-        }
-
-        res.status(201).json(payload);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: "Internal server error" });
+        // Stream the S3 object body directly to the Express response
+        stream.pipe(res);
+    } catch (error) {
+        console.error(`[FilesController] Error proxying S3 file:`, error);
+        res.status(404).json({ message: "File not found or access denied" });
     }
 };
 
-/* ===== REACTIONS ===== */
-exports.addReaction = async (req, res) => {
+/**
+ * Direct Upload to S3
+ */
+exports.uploadFile = async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ message: "No file provided" });
+    }
+
     try {
-        const userId = req.user.id;
-        const { messageId } = req.params;
-        const { emoji } = req.body;
+        let fileBuffer = req.file.buffer;
+        let contentType = req.file.mimetype;
+        let filename = req.file.originalname;
 
-        const message = await Message.findById(messageId);
-        if (!message) return res.status(404).json({ message: "Message not found" });
-
-        let reaction = message.reactions.find(r => r.emoji === emoji);
-        if (reaction) {
-            if (!reaction.users.includes(userId)) {
-                reaction.users.push(userId);
+        if (contentType.startsWith('image/') && req.file.size <= SHARP_SIZE_LIMIT) {
+            try {
+                const sharpInstance = sharp(fileBuffer);
+                const metadata = await sharpInstance.metadata();
+                if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
+                    fileBuffer = await sharpInstance.jpeg({ quality: 100, progressive: true, mozjpeg: true }).toBuffer();
+                    contentType = 'image/jpeg';
+                } else if (metadata.format === 'png') {
+                    fileBuffer = await sharpInstance.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+                    contentType = 'image/png';
+                } else if (metadata.format === 'webp') {
+                    fileBuffer = await sharpInstance.webp({ lossless: true }).toBuffer();
+                    contentType = 'image/webp';
+                }
+            } catch (sharpError) {
+                console.warn(`[FilesController] Sharp processing failed for: ${filename}`, sharpError);
             }
-        } else {
-            message.reactions.push({ emoji, users: [userId] });
         }
 
-        await message.save();
+        const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
+        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
 
-        if (publisher.isOpen) {
-            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
-                type: 'REACTION_UPDATE', 
-                data: { messageId, reactions: message.reactions, channelId: message.channel } 
-            }));
-        }
-
-        res.json(message.reactions);
-    } catch (err) {
-        res.status(500).json({ message: "Internal server error" });
+        res.status(201).json({
+            id: uploadedAsset.id,
+            filename: uploadedAsset.filename,
+            contentType: uploadedAsset.contentType,
+            url: fullUrl 
+        });
+    } catch (error) {
+        console.error("[FilesController] Upload error:", error);
+        if (!res.headersSent) res.status(500).json({ message: "S3 upload failed processing" });
     }
 };
 
-exports.removeReaction = async (req, res) => {
+/**
+ * Chunked Upload: Receives chunks
+ */
+exports.uploadChunk = async (req, res) => {
+    const { fileId, chunkIndex } = req.body;
+    if (!fileId || chunkIndex === undefined || !req.file) {
+        return res.status(400).json({ message: "Missing required chunk data" });
+    }
+
     try {
-        const userId = req.user.id;
-        const { messageId } = req.params;
-        const { emoji } = req.body;
-
-        const message = await Message.findById(messageId);
-        if (!message) return res.status(404).json({ message: "Message not found" });
-
-        let reaction = message.reactions.find(r => r.emoji === emoji);
-        if (reaction) {
-            reaction.users = reaction.users.filter(id => id.toString() !== userId);
-            if (reaction.users.length === 0) {
-                message.reactions = message.reactions.filter(r => r.emoji !== emoji);
-            }
-            await message.save();
-        }
-
-        if (publisher.isOpen) {
-            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
-                type: 'REACTION_UPDATE', 
-                data: { messageId, reactions: message.reactions, channelId: message.channel } 
-            }));
-        }
-
-        res.json(message.reactions);
-    } catch (err) {
-        res.status(500).json({ message: "Internal server error" });
+        const chunkDir = path.join(TEMP_DIR, fileId);
+        await fs.ensureDir(chunkDir);
+        const chunkPath = path.join(chunkDir, `chunk-${chunkIndex}`);
+        await fs.writeFile(chunkPath, req.file.buffer);
+        res.status(200).json({ message: "Chunk uploaded successfully" });
+    } catch (error) {
+        console.error(`[FilesController] Chunk upload error for fileId ${fileId}:`, error);
+        res.status(500).json({ message: "Failed to store chunk" });
     }
 };
 
-/* ===== GET HISTORY ===== */
-exports.getMessages = async (req, res) => {
+/**
+ * Finalize Chunked Upload: Stream to S3
+ */
+exports.finalizeUpload = async (req, res) => {
+    const { fileId, fileName, fileType } = req.body;
+
+    if (!fileId || !fileName) {
+        return res.status(400).json({ message: "Incomplete data for finalization" });
+    }
+
+    const chunkDir = path.join(TEMP_DIR, fileId);
+
     try {
-        const userId = req.user.id;
-        const { channelId } = req.params;
+        const chunkFiles = await fs.readdir(chunkDir);
+        chunkFiles.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]));
 
-        const channel = await Channel.findById(channelId);
-        if (!channel) return res.status(404).json({ message: "Channel not found" });
-
-        const server = await Server.findById(channel.server);
-        if (!server) return res.status(404).json({ message: "Server not found" });
-
-        const canRead = await canPerformAction(
-            channel.server,
-            userId,
-            channel,
-            "READ_MESSAGE_HISTORY"
+        const chunkBuffers = await Promise.all(
+            chunkFiles.map(file => fs.readFile(path.join(chunkDir, file)))
         );
-        if (!canRead)
-            return res.status(403).json({ message: "Access denied" });
+        let finalBuffer = Buffer.concat(chunkBuffers);
 
-        // Build query to filter whispers
-        const query = { 
-            channel: channelId,
-            $or: [
-                { isWhisper: { $ne: true } }, // Regular messages
-                { author: userId }, // Whispers I sent
-                { recipient: userId } // Whispers sent to me
-            ]
-        };
-
-        if (server.owner.toString() === userId) {
-            delete query.$or;
-            query.channel = channelId;
+        let contentType = fileType;
+        if (contentType.startsWith('image/') && finalBuffer.length <= SHARP_SIZE_LIMIT) {
+            try {
+                const sharpInstance = sharp(finalBuffer);
+                const metadata = await sharpInstance.metadata();
+                if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
+                    finalBuffer = await sharpInstance.jpeg({ quality: 100, progressive: true, mozjpeg: true }).toBuffer();
+                    contentType = 'image/jpeg';
+                } else if (metadata.format === 'png') {
+                    finalBuffer = await sharpInstance.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+                    contentType = 'image/png';
+                } else if (metadata.format === 'webp') {
+                    finalBuffer = await sharpInstance.webp({ lossless: true }).toBuffer();
+                    contentType = 'image/webp';
+                }
+            } catch (err) {
+                console.warn(`[FilesController] Compression failed for reassembled: ${fileName}`, err);
+            }
         }
 
-        const messages = await Message.find(query)
-            .sort({ createdAt: -1 })
-            .limit(50)
-            .populate("author", "username profileIcon")
-            .populate("character", "name icon")
-            .populate("recipient", "username profileIcon")
-            .populate({
-                path: "replyTo",
-                populate: [
-                    { path: "author", select: "username avatar profileIcon" },
-                    { path: "character", select: "name icon" }
-                ]
-            })
-            .lean();
+        const uploadedAsset = await s3Service.uploadToS3(finalBuffer, fileName, contentType);
+        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
 
-        messages.forEach(msg => processIconUrls(req, msg));
+        // Cleanup
+        await fs.remove(chunkDir).catch(e => console.error("[FilesController] Failed to cleanup chunks:", e));
 
-        res.json(messages);
-    } catch (err) {
-        res.status(500).json({ message: "Internal server error" });
+        res.status(201).json({
+            id: uploadedAsset.id,
+            filename: uploadedAsset.filename,
+            contentType: uploadedAsset.contentType,
+            url: fullUrl
+        });
+
+    } catch (error) {
+        console.error(`[FilesController] Finalization error for fileId ${fileId}:`, error);
+        if (!res.headersSent) res.status(500).json({ message: "Failed to finalize upload to S3" });
     }
 };
 </file>
@@ -2299,19 +4219,40 @@ publisher.connect().catch(err => console.error('Redis Publisher initial connect 
 function getFileFullUrl(req, key) {
     if (!key) return null;
     if (key.startsWith('http')) return key;
+    if (key.startsWith('/api/files/')) {
+        return `${req.protocol}://${req.get('host')}${key}`;
+    }
     return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function normalizeStoredFileValue(value) {
+    if (!value || typeof value !== 'string') return value;
+    return s3Service.normalizeStoredFileValue(value);
+}
+
+function toServerResponse(req, server) {
+    const serverObj = typeof server.toObject === 'function' ? server.toObject() : { ...server };
+    const storedIcon = normalizeStoredFileValue(serverObj.icon);
+
+    return {
+        ...serverObj,
+        icon: getFileFullUrl(req, storedIcon),
+        iconKey: storedIcon,
+        iconUrl: getFileFullUrl(req, storedIcon)
+    };
 }
 
 function processUserIcon(req, user) {
     if (user && user.profileIcon) {
-        user.profileIconUrl = getFileFullUrl(req, user.profileIcon);
+        const storedIcon = normalizeStoredFileValue(user.profileIcon);
+        user.profileIcon = getFileFullUrl(req, storedIcon);
+        user.profileIconUrl = getFileFullUrl(req, storedIcon);
     }
 }
 
 async function notifyMemberUpdate(req, serverId) {
     if (!publisher.isOpen) return;
     
-    // Fetch fresh server details to send to clients
     try {
         const server = await Server.findById(serverId)
             .populate({
@@ -2331,7 +4272,11 @@ async function notifyMemberUpdate(req, serverId) {
                  const ownerId = char.ownerId.toString();
                  if (!charactersByOwner[ownerId]) charactersByOwner[ownerId] = [];
                  charactersByOwner[ownerId].push(char);
-                 if (char.icon) char.iconUrl = getFileFullUrl(req, char.icon);
+                 if (char.icon) {
+                     const storedIcon = normalizeStoredFileValue(char.icon);
+                     char.icon = getFileFullUrl(req, storedIcon);
+                     char.iconUrl = getFileFullUrl(req, storedIcon);
+                 }
              }
 
              const members = server.members.map(member => {
@@ -2357,7 +4302,7 @@ function generateJoinCode() {
     return crypto.randomBytes(4).toString("hex");
 }
 
-async function handleIconUpload(file, req) {
+async function handleIconUpload(file) {
     let fileBuffer = file.buffer;
     let contentType = file.mimetype;
     let filename = file.originalname;
@@ -2382,7 +4327,7 @@ async function handleIconUpload(file, req) {
     }
 
     const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
-    return uploadedAsset.key; // Return only the key
+    return uploadedAsset.key;
 }
 
 /**
@@ -2391,10 +4336,10 @@ async function handleIconUpload(file, req) {
 exports.createServer = async (req, res) => {
     const userId = req.user.id;
     const { name, icon } = req.body;
-    let iconKey = icon;
+    let iconKey = normalizeStoredFileValue(icon);
 
     if (req.files && req.files.icon) {
-        iconKey = await handleIconUpload(req.files.icon[0], req);
+        iconKey = await handleIconUpload(req.files.icon[0]);
     }
 
     const server = await Server.create({
@@ -2423,10 +4368,7 @@ exports.createServer = async (req, res) => {
 
     await server.save();
     
-    const serverObj = server.toObject();
-    serverObj.iconUrl = getFileFullUrl(req, serverObj.icon);
-    
-    res.status(201).json(serverObj);
+    res.status(201).json(toServerResponse(req, server));
 };
 
 /**
@@ -2614,19 +4556,16 @@ exports.updateServer = async (req, res) => {
     }
 
     if (req.files && req.files.icon) {
-        server.icon = await handleIconUpload(req.files.icon[0], req);
+        server.icon = await handleIconUpload(req.files.icon[0]);
     } else if (icon !== undefined) {
-        server.icon = icon;
+        server.icon = normalizeStoredFileValue(icon);
     }
 
     if (name) server.name = name;
 
     await server.save();
     
-    const serverObj = server.toObject();
-    serverObj.iconUrl = getFileFullUrl(req, serverObj.icon);
-    
-    res.json(serverObj);
+    res.json(toServerResponse(req, server));
 };
 
 exports.updateMemberRoles = async (req, res) => {
@@ -2701,11 +4640,13 @@ exports.getUserServers= async (req, res) => {
     }).lean();
 
     const result = servers.map(server => {
+        const response = toServerResponse(req, server);
         return {
-            _id: server._id,
-            name: server.name,
-            icon: server.icon,
-            iconUrl: getFileFullUrl(req, server.icon)
+            _id: response._id,
+            name: response.name,
+            icon: response.icon,
+            iconKey: response.iconKey,
+            iconUrl: response.iconUrl
         };
     });
 
@@ -2751,7 +4692,7 @@ exports.getServerDetails = async (req, res) => {
         const server = await Server.findById(serverId)
             .populate({
                 path: 'members.user',
-                select: 'username email profileIcon'
+                select: 'username profileIcon'
             })
             .populate({
                 path: 'members.roles',
@@ -2790,13 +4731,14 @@ exports.getServerDetails = async (req, res) => {
             }
             
             if (char.icon) {
-                char.iconUrl = getFileFullUrl(req, char.icon);
+                const storedIcon = normalizeStoredFileValue(char.icon);
+                char.icon = getFileFullUrl(req, storedIcon);
+                char.iconUrl = getFileFullUrl(req, storedIcon);
             }
 
             charactersByOwner[ownerId].push(char);
         }
 
-        // Attach characters to members
         server.members = server.members.map(member => {
             processUserIcon(req, member.user);
             return {
@@ -2805,9 +4747,7 @@ exports.getServerDetails = async (req, res) => {
             }
         });
 
-        if (server.icon) {
-            server.iconUrl = getFileFullUrl(req, server.icon);
-        }
+        const responseServer = toServerResponse(req, server);
 
         const allChannels = await Channel.find({ server: serverId }).sort({ position: 1 });
 
@@ -2829,7 +4769,7 @@ exports.getServerDetails = async (req, res) => {
         }
 
         res.json({
-            ...server,
+            ...responseServer,
             channels: visibleChannels
         });
 
@@ -2878,311 +4818,6 @@ exports.getOrCreateWhisperChannel = async (req, res) => {
 };
 </file>
 
-<file path="api-service/server.js">
-const path = require('path');
-const mongoose = require('mongoose');
-const http = require('http');
-const app = require('./app');
-
-// Load environment variables
-// This will try to load .env, or you can rely on Docker-injected variables
-require('dotenv').config(); 
-
-// Support the specific naming convention if those files exist
-const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development';
-require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
-
-const server = http.createServer(app);
-
-// Robust MongoDB Connection Options
-const mongooseOptions = {
-    serverSelectionTimeoutMS: 30000, // Wait 30s before failing
-    socketTimeoutMS: 45000,          // Close sockets after 45s of inactivity
-    family: 4                        // Use IPv4
-};
-
-// Use the MONGO_URI from env, or the Atlas one if provided directly
-const dbUri = process.env.MONGO_URI || 'mongodb://localhost:27017/your_db';
-
-// Connect to MongoDB
-mongoose.connect(dbUri, mongooseOptions)
-    .then(() => console.log(`Connected to MongoDB`))
-    .catch(err => {
-        console.error('MongoDB connection error:', err);
-        process.exit(1); // Exit if we can't connect to DB
-    });
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`API Service running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
-});
-
-let worker;
-const gracefulShutdown = () => {
-    console.log('Shutting down gracefully...');
-    server.close(() => {
-        console.log('HTTP server closed.');
-        if (worker) worker.close();
-        process.exit(0);
-    });
-};
-
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
-</file>
-
-<file path="nginx.local.conf">
-events {
-    worker_connections 1024;
-}
-
-http {
-    resolver 127.0.0.11 valid=30s;
-    client_max_body_size 50M;
-
-    map $http_upgrade $connection_upgrade {
-        default upgrade;
-        '' close;
-    }
-
-    server {
-        listen 80;
-        server_name localhost;
-
-        # Standard API
-        location /api/ {
-            proxy_pass http://api-service:3000/;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_read_timeout 300s;
-        }
-
-        # Messaging Service
-        location /socket.io/ {
-            proxy_pass http://messaging-service:3001;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_cache_bypass $http_upgrade;
-        }
-
-        # Map Service
-        location /map/ {
-            proxy_pass http://map-service:3003;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection $connection_upgrade;
-            proxy_set_header Host $host;
-        }
-
-        # LiveKit Signaling and RTC
-        location /livekit/ {
-            # CORS headers - 'always' ensures they are sent even on 502 errors
-            add_header 'Access-Control-Allow-Origin' 'http://localhost:4200' always;
-            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
-            add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Range' always;
-            add_header 'Access-Control-Allow-Credentials' 'true' always;
-
-            if ($request_method = 'OPTIONS') {
-                add_header 'Access-Control-Allow-Origin' 'http://localhost:4200' always;
-                add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
-                add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Range' always;
-                add_header 'Access-Control-Allow-Credentials' 'true' always;
-                add_header 'Content-Length' 0;
-                add_header 'Content-Type' 'text/plain; charset=utf-8';
-                return 204;
-            }
-
-            rewrite ^/livekit/(.*) /$1 break;
-            proxy_pass http://host.docker.internal:7880;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection $connection_upgrade;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-
-            proxy_buffering off;
-            proxy_read_timeout 86400s;
-        }
-    }
-}
-</file>
-
-<file path="api-service/controllers/files.controller.js">
-const s3Service = require('../services/s3.service');
-const sharp = require('sharp');
-const fs = require('fs-extra');
-const path = require('path');
-const os = require('os');
-
-const TEMP_DIR = path.join(os.tmpdir(), 'd-dplatform-uploads');
-const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
-
-/**
- * Proxy S3 file through API:
- * GET /api/files/:id
- * (Here :id is the full S3 key, e.g. uuid-filename.ext)
- */
-exports.getFile = async (req, res) => {
-    try {
-        const key = req.params.id; 
-        
-        console.log(`[FilesController] Proxying request for S3 key: ${key}`);
-        const { stream, contentType, contentLength } = await s3Service.getObjectStream(key);
-
-        if (!stream) {
-            return res.status(404).json({ message: "File not found in S3" });
-        }
-
-        res.set('Content-Type', contentType);
-        if (contentLength) res.set('Content-Length', contentLength);
-        
-        // Use Content-Disposition inline for viewing in browser, with filename if possible
-        const filename = key.split('-').slice(1).join('-') || 'file';
-        res.set('Content-Disposition', `inline; filename="${filename}"`);
-
-        // Stream the S3 object body directly to the Express response
-        stream.pipe(res);
-    } catch (error) {
-        console.error(`[FilesController] Error proxying S3 file:`, error);
-        res.status(404).json({ message: "File not found or access denied" });
-    }
-};
-
-/**
- * Direct Upload to S3
- */
-exports.uploadFile = async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ message: "No file provided" });
-    }
-
-    try {
-        let fileBuffer = req.file.buffer;
-        let contentType = req.file.mimetype;
-        let filename = req.file.originalname;
-
-        if (contentType.startsWith('image/') && req.file.size <= SHARP_SIZE_LIMIT) {
-            try {
-                const sharpInstance = sharp(fileBuffer);
-                const metadata = await sharpInstance.metadata();
-                if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
-                    fileBuffer = await sharpInstance.jpeg({ quality: 100, progressive: true, mozjpeg: true }).toBuffer();
-                    contentType = 'image/jpeg';
-                } else if (metadata.format === 'png') {
-                    fileBuffer = await sharpInstance.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
-                    contentType = 'image/png';
-                } else if (metadata.format === 'webp') {
-                    fileBuffer = await sharpInstance.webp({ lossless: true }).toBuffer();
-                    contentType = 'image/webp';
-                }
-            } catch (sharpError) {
-                console.warn(`[FilesController] Sharp processing failed for: ${filename}`, sharpError);
-            }
-        }
-
-        const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
-        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
-
-        res.status(201).json({
-            id: uploadedAsset.id,
-            filename: uploadedAsset.filename,
-            contentType: uploadedAsset.contentType,
-            url: fullUrl 
-        });
-    } catch (error) {
-        console.error("[FilesController] Upload error:", error);
-        if (!res.headersSent) res.status(500).json({ message: "S3 upload failed processing" });
-    }
-};
-
-/**
- * Chunked Upload: Receives chunks
- */
-exports.uploadChunk = async (req, res) => {
-    const { fileId, chunkIndex } = req.body;
-    if (!fileId || chunkIndex === undefined || !req.file) {
-        return res.status(400).json({ message: "Missing required chunk data" });
-    }
-
-    try {
-        const chunkDir = path.join(TEMP_DIR, fileId);
-        await fs.ensureDir(chunkDir);
-        const chunkPath = path.join(chunkDir, `chunk-${chunkIndex}`);
-        await fs.writeFile(chunkPath, req.file.buffer);
-        res.status(200).json({ message: "Chunk uploaded successfully" });
-    } catch (error) {
-        console.error(`[FilesController] Chunk upload error for fileId ${fileId}:`, error);
-        res.status(500).json({ message: "Failed to store chunk" });
-    }
-};
-
-/**
- * Finalize Chunked Upload: Stream to S3
- */
-exports.finalizeUpload = async (req, res) => {
-    const { fileId, fileName, fileType } = req.body;
-
-    if (!fileId || !fileName) {
-        return res.status(400).json({ message: "Incomplete data for finalization" });
-    }
-
-    const chunkDir = path.join(TEMP_DIR, fileId);
-
-    try {
-        const chunkFiles = await fs.readdir(chunkDir);
-        chunkFiles.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]));
-
-        const chunkBuffers = await Promise.all(
-            chunkFiles.map(file => fs.readFile(path.join(chunkDir, file)))
-        );
-        let finalBuffer = Buffer.concat(chunkBuffers);
-
-        let contentType = fileType;
-        if (contentType.startsWith('image/') && finalBuffer.length <= SHARP_SIZE_LIMIT) {
-            try {
-                const sharpInstance = sharp(finalBuffer);
-                const metadata = await sharpInstance.metadata();
-                if (metadata.format === 'jpeg' || metadata.format === 'jpg') {
-                    finalBuffer = await sharpInstance.jpeg({ quality: 100, progressive: true, mozjpeg: true }).toBuffer();
-                    contentType = 'image/jpeg';
-                } else if (metadata.format === 'png') {
-                    finalBuffer = await sharpInstance.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
-                    contentType = 'image/png';
-                } else if (metadata.format === 'webp') {
-                    finalBuffer = await sharpInstance.webp({ lossless: true }).toBuffer();
-                    contentType = 'image/webp';
-                }
-            } catch (err) {
-                console.warn(`[FilesController] Compression failed for reassembled: ${fileName}`, err);
-            }
-        }
-
-        const uploadedAsset = await s3Service.uploadToS3(finalBuffer, fileName, contentType);
-        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
-
-        // Cleanup
-        await fs.remove(chunkDir).catch(e => console.error("[FilesController] Failed to cleanup chunks:", e));
-
-        res.status(201).json({
-            id: uploadedAsset.id,
-            filename: uploadedAsset.filename,
-            contentType: uploadedAsset.contentType,
-            url: fullUrl
-        });
-
-    } catch (error) {
-        console.error(`[FilesController] Finalization error for fileId ${fileId}:`, error);
-        if (!res.headersSent) res.status(500).json({ message: "Failed to finalize upload to S3" });
-    }
-};
-</file>
-
 <file path="messaging-service/index.js">
 const { Server } = require('socket.io');
 const redis = require('redis');
@@ -3198,7 +4833,7 @@ const io = new Server(server, {
     transports: ['websocket', 'polling']
 });
 
-const subscriber = redis.createClient({ 
+const subscriber = redis.createClient({
     url: process.env.REDIS_URL || 'redis://redis:6379',
     socket: {
         reconnectStrategy: (retries) => {
@@ -3211,19 +4846,46 @@ const subscriber = redis.createClient({
     }
 });
 
-subscriber.on('error', (err) => console.error('Redis Error:', err));
+subscriber.on('error', (err) => {
+    // Only log if not in test environment
+    if (process.env.NODE_ENV !== 'test') {
+        console.error('Redis Error:', err);
+    }
+});
 
-async function start() {
+// Map to store userId to socketId mapping
+const userSocketMap = new Map();
+
+async function start(redisClient = subscriber) {
     try {
-        await subscriber.connect();
+        if (!redisClient.isOpen) {
+            await redisClient.connect();
+        }
         console.log('Connected to Redis Sub/Pub');
 
-        await subscriber.subscribe('CHAT_MESSAGES', (message) => {
+        await redisClient.subscribe('CHAT_MESSAGES', (message) => {
             try {
                 const payload = JSON.parse(message);
                 if (payload.type === 'NEW_MESSAGE') {
                     const data = payload.data;
-                    io.to(data.channelId).emit('new_message', data);
+                    const authorId = data.author?._id || data.author;
+                    const recipientId = data.recipient?._id || data.recipient;
+
+                    if (data.isWhisper && recipientId && authorId) {
+                        // It's a whisper, emit only to sender and recipient
+                        const senderSocketId = userSocketMap.get(authorId.toString());
+                        const recipientSocketId = userSocketMap.get(recipientId.toString());
+
+                        if (senderSocketId) {
+                            io.to(senderSocketId).emit('new_message', data);
+                        }
+                        if (recipientSocketId && recipientSocketId !== senderSocketId) { 
+                            io.to(recipientSocketId).emit('new_message', data);
+                        }
+                    } else {
+                        // Regular message, emit to the channel room
+                        io.to(data.channelId).emit('new_message', data);
+                    }
                 } else if (payload.type === 'REACTION_UPDATE') {
                     io.to(payload.data.channelId).emit('reaction_update', payload.data);
                 }
@@ -3232,7 +4894,7 @@ async function start() {
             }
         });
 
-        await subscriber.subscribe('SERVER_UPDATES', (message) => {
+        await redisClient.subscribe('SERVER_UPDATES', (message) => {
             try {
                 const payload = JSON.parse(message);
                 if (payload.type === 'MEMBER_UPDATE') {
@@ -3245,50 +4907,469 @@ async function start() {
             }
         });
     } catch (err) {
-        console.error("Redis connection failed, retrying in background...", err);
+        if (process.env.NODE_ENV !== 'test') {
+            console.error("Redis connection failed, retrying in background...", err);
+        }
     }
 }
 
 io.on('connection', (socket) => {
-    console.log("User connected to Messaging:", socket.id);
+    // Retrieve userId from socket.handshake.auth (frontend needs to send this)
+    const userId = socket.handshake.auth.userId;
+    if (userId) {
+        userSocketMap.set(userId.toString(), socket.id);
+
+        socket.on('disconnect', () => {
+            userSocketMap.delete(userId.toString());
+        });
+    }
 
     socket.on('join_channel', (channelId) => {
-        console.log(`Socket ${socket.id} joining channel ${channelId}`);
         socket.join(channelId);
     });
 
     socket.on('join_server', (serverId) => {
-        console.log(`Socket ${socket.id} joining server room server:${serverId}`);
         socket.join(`server:${serverId}`);
     });
-
-    socket.on('disconnect', () => console.log("User disconnected from Messaging"));
 });
-
-server.listen(3001, '0.0.0.0', () => {
-    console.log('Messaging Service listening on port 3001');
-});
-
-start();
 
 const shutdown = async (signal) => {
-    console.log(`Received ${signal}. Shutting down...`);
+    if (process.env.NODE_ENV !== 'test') {
+        console.log(`Received ${signal}. Shutting down...`);
+    }
     try {
         io.close();
         if (subscriber.isOpen) await subscriber.quit();
-        server.close(() => {
-            console.log("HTTP server closed.");
-            process.exit(0);
+        return new Promise((resolve) => {
+            server.close(() => {
+                if (process.env.NODE_ENV !== 'test') {
+                    console.log("HTTP server closed.");
+                }
+                resolve();
+                if (require.main === module) process.exit(0);
+            });
+            if (require.main === module) setTimeout(() => process.exit(1), 5000);
         });
-        setTimeout(() => process.exit(1), 5000);
     } catch (err) {
         console.error("Error during shutdown:", err);
-        process.exit(1);
+        if (require.main === module) process.exit(1);
     }
 };
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+if (require.main === module) {
+    server.listen(3001, '0.0.0.0', () => {
+        console.log('Messaging Service listening on port 3001');
+    });
+    start();
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
+module.exports = {
+    server,
+    io,
+    subscriber,
+    start,
+    shutdown,
+    userSocketMap
+};
+</file>
+
+<file path="api-service/controllers/message.controller.js">
+const Message = require("../models/Message");
+const Channel = require("../models/Channel");
+const Server = require("../models/Server");
+const Role = require("../models/Roles");
+const Character = require("../models/Character");
+const redis = require('redis');
+
+const publisher = redis.createClient({ 
+    url: process.env.REDIS_URL || 'redis://redis:6379',
+    socket: {
+        reconnectStrategy: (retries) => {
+            if (retries > 20) {
+                console.error('Redis Publisher: Max retries reached, giving up.');
+                return new Error('Redis connection failed');
+            }
+            return Math.min(retries * 100, 3000);
+        }
+    }
+});
+
+publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
+publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
+
+function getFileFullUrl(req, key) {
+    if (!key) return null;
+    if (key.startsWith('http')) return key;
+    return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+}
+
+function replaceTrailingAttachmentId(url, attachmentId, fileKey) {
+    if (!url || !attachmentId || !fileKey) return url;
+
+    try {
+        const parsedUrl = new URL(url, 'http://localhost');
+        const segments = (parsedUrl.pathname || '').split('/').filter(Boolean);
+        if (segments[segments.length - 1] === attachmentId) {
+            segments[segments.length - 1] = fileKey;
+            parsedUrl.pathname = `/${segments.join('/')}`;
+            return parsedUrl.origin === 'http://localhost'
+                ? `${parsedUrl.pathname}${parsedUrl.search}`
+                : `${parsedUrl.toString()}`;
+        }
+    } catch {
+        if (url.endsWith(`/${attachmentId}`)) {
+            return `${url.slice(0, -attachmentId.length)}${fileKey}`;
+        }
+    }
+
+    return url;
+}
+
+function buildAttachmentKey(attachment) {
+    if (!attachment) return null;
+
+    if (attachment.key) {
+        return attachment.key;
+    }
+
+    if (attachment.id && attachment.filename) {
+        return `${attachment.id}-${attachment.filename}`;
+    }
+
+    if (attachment.id && attachment.name) {
+        return `${attachment.id}-${attachment.name}`;
+    }
+
+    return attachment.id || null;
+}
+
+function extractFilenameFromUrl(url) {
+    if (!url) return null;
+
+    try {
+        const parsedUrl = new URL(url, 'http://localhost');
+        const pathname = parsedUrl.pathname || '';
+        const lastSegment = pathname.split('/').filter(Boolean).pop();
+        return lastSegment || null;
+    } catch {
+        const lastSegment = url.split('/').filter(Boolean).pop();
+        return lastSegment || null;
+    }
+}
+
+function normalizeAttachment(req, attachment) {
+    if (!attachment) return null;
+
+    const filename = attachment.filename || attachment.name || extractFilenameFromUrl(attachment.url) || 'attachment';
+    const fileKey = buildAttachmentKey({ ...attachment, filename });
+    const normalizedUrl = replaceTrailingAttachmentId(attachment.url, attachment.id, fileKey);
+    const url = normalizedUrl || getFileFullUrl(req, fileKey);
+    if (!url) return null;
+
+    return {
+        id: attachment.id || null,
+        key: fileKey,
+        url,
+        name: attachment.name || filename,
+        filename,
+        contentType: attachment.contentType || 'application/octet-stream'
+    };
+}
+
+function normalizeAttachments(req, attachments) {
+    if (!Array.isArray(attachments)) {
+        return [];
+    }
+
+    return attachments
+        .map(attachment => normalizeAttachment(req, attachment))
+        .filter(Boolean);
+}
+
+function processIconUrls(req, message) {
+    if (message.author && message.author.profileIcon) {
+        message.author.profileIconUrl = getFileFullUrl(req, message.author.profileIcon);
+    }
+    if (message.recipient && message.recipient.profileIcon) {
+        message.recipient.profileIconUrl = getFileFullUrl(req, message.recipient.profileIcon);
+    }
+    if (message.character && message.character.icon) {
+        message.character.iconUrl = getFileFullUrl(req, message.character.icon);
+    }
+    if (message.replyTo) {
+        if (message.replyTo.author && message.replyTo.author.profileIcon) {
+            message.replyTo.author.profileIconUrl = getFileFullUrl(req, message.replyTo.author.profileIcon);
+        }
+        if (message.replyTo.character && message.replyTo.character.icon) {
+            message.replyTo.character.iconUrl = getFileFullUrl(req, message.replyTo.character.icon);
+        }
+    }
+}
+
+function normalizeMessagePayload(req, message, options = {}) {
+    const payload = typeof message.toObject === 'function' ? message.toObject() : { ...message };
+    const resolvedChannelId = payload.channelId ?? payload.channel ?? options.channelId;
+
+    if (resolvedChannelId != null) {
+        payload.channelId = String(resolvedChannelId);
+    }
+
+    if (payload.channel != null) {
+        payload.channel = String(payload.channel);
+    }
+
+    if (payload.server != null) {
+        payload.server = String(payload.server);
+    }
+
+    if (Array.isArray(payload.attachments)) {
+        payload.attachments = normalizeAttachments(req, payload.attachments);
+    }
+
+    if (Array.isArray(payload.reactions)) {
+        payload.reactions = payload.reactions;
+    }
+
+    processIconUrls(req, payload);
+
+    if (payload.replyTo && Array.isArray(payload.replyTo.attachments)) {
+        payload.replyTo.attachments = normalizeAttachments(req, payload.replyTo.attachments);
+    }
+
+    return payload;
+}
+
+/* ===== PERMISSIONS ===== */
+
+const canPerformAction = async (serverId, userId, channel, permissionName) => {
+    const server = await Server.findById(serverId);
+    if (!server) return false;
+
+    if (server.owner.toString() === userId) return true;
+
+    const member = server.members.find(m => m.user.toString() === userId);
+    if (!member) return false;
+
+    const memberRoles = await Role.find({ _id: { $in: member.roles } });
+
+    if (memberRoles.some(r => r.permissions.ADMINISTRATOR)) return true;
+
+    const roleIds = member.roles.map(id => id.toString());
+    const overwrites = channel.permissionOverwrites.filter(ow =>
+        roleIds.includes(ow.role.toString())
+    );
+
+    if (overwrites.some(ow => ow.deny.includes(permissionName))) return false;
+    if (overwrites.some(ow => ow.allow.includes(permissionName))) return true;
+
+    return memberRoles.some(r => r.permissions[permissionName] === true);
+};
+
+/* ===== SEND MESSAGE ===== */
+exports.sendMessage = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { channelId } = req.params;
+        const { content, characterId, attachments, replyTo, isWhisper, recipientId } = req.body;
+
+        const channel = await Channel.findById(channelId);
+        if (!channel) return res.status(404).json({ message: "Channel not found" });
+
+        const canSend = await canPerformAction(
+            channel.server,
+            userId,
+            channel,
+            "SEND_MESSAGES"
+        );
+        if (!canSend) return res.status(403).json({ message: "Permission denied" });
+
+        if (characterId) {
+            const character = await Character.findOne({
+                _id: characterId,
+                ownerId: userId
+            });
+            if (!character) return res.status(403).json({ message: "Invalid character" });
+        }
+
+        const normalizedAttachments = normalizeAttachments(req, attachments);
+        const normalizedContent = typeof content === 'string' ? content : '';
+        if (!normalizedContent.trim() && normalizedAttachments.length === 0) {
+            return res.status(400).json({ message: "Message content or attachments are required" });
+        }
+
+        const messageData = {
+            channel: channelId,
+            server: channel.server,
+            author: userId,
+            character: characterId || null,
+            content: normalizedContent,
+            attachments: normalizedAttachments,
+            replyTo: replyTo || null,
+            isWhisper: Boolean(isWhisper),
+            recipient: recipientId || null
+        };
+
+        const message = await Message.create(messageData);
+
+        await message.populate([
+            { path: "author", select: "username avatar profileIcon" },
+            { path: "character", select: "name icon" },
+            { 
+                path: "replyTo", 
+                populate: [
+                    { path: "author", select: "username avatar profileIcon" },
+                    { path: "character", select: "name icon" }
+                ]
+            },
+            { path: "recipient", select: "username avatar profileIcon" }
+        ]);
+
+        const payload = normalizeMessagePayload(req, message, { channelId });
+
+        if (publisher.isOpen) {
+            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ type: 'NEW_MESSAGE', data: payload }));
+        }
+
+        res.status(201).json(payload);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+/* ===== REACTIONS ===== */
+exports.addReaction = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageId } = req.params;
+        const { emoji } = req.body;
+
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: "Message not found" });
+
+        let reaction = message.reactions.find(r => r.emoji === emoji);
+        if (reaction) {
+            if (!reaction.users.includes(userId)) {
+                reaction.users.push(userId);
+            }
+        } else {
+            message.reactions.push({ emoji, users: [userId] });
+        }
+
+        await message.save();
+
+        if (publisher.isOpen) {
+            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
+                type: 'REACTION_UPDATE', 
+                data: { messageId, reactions: message.reactions, channelId: String(message.channel) } 
+            }));
+        }
+
+        res.json(message.reactions);
+    } catch (err) {
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+exports.removeReaction = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageId } = req.params;
+        const { emoji } = req.body;
+
+        const message = await Message.findById(messageId);
+        if (!message) return res.status(404).json({ message: "Message not found" });
+
+        let reaction = message.reactions.find(r => r.emoji === emoji);
+        if (reaction) {
+            reaction.users = reaction.users.filter(id => id.toString() !== userId);
+            if (reaction.users.length === 0) {
+                message.reactions = message.reactions.filter(r => r.emoji !== emoji);
+            }
+            await message.save();
+        }
+
+        if (publisher.isOpen) {
+            await publisher.publish('CHAT_MESSAGES', JSON.stringify({ 
+                type: 'REACTION_UPDATE', 
+                data: { messageId, reactions: message.reactions, channelId: String(message.channel) } 
+            }));
+        }
+
+        res.json(message.reactions);
+    } catch (err) {
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+/* ===== GET HISTORY ===== */
+exports.getMessages = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { channelId } = req.params;
+
+        const channel = await Channel.findById(channelId);
+        if (!channel) return res.status(404).json({ message: "Channel not found" });
+
+        const server = await Server.findById(channel.server);
+        if (!server) return res.status(404).json({ message: "Server not found" });
+
+        const canRead = await canPerformAction(
+            channel.server,
+            userId,
+            channel,
+            "READ_MESSAGE_HISTORY"
+        );
+        if (!canRead)
+            return res.status(403).json({ message: "Access denied" });
+
+        let query;
+        if (channel.type === 'whisper') {
+            const isServerOwner = server.owner.toString() === userId;
+            const isChannelRecipient = channel.recipient?.toString() === userId;
+
+            if (!isServerOwner && !isChannelRecipient) {
+                return res.status(403).json({ message: "Access denied" });
+            }
+
+            query = { channel: channelId };
+        } else {
+            query = {
+                channel: channelId,
+                $or: [
+                    { isWhisper: { $ne: true } },
+                    { author: userId },
+                    { recipient: userId }
+                ]
+            };
+
+            if (server.owner.toString() === userId) {
+                delete query.$or;
+            }
+        }
+
+        const messages = await Message.find(query)
+            .sort({ createdAt: -1 })
+            .limit(50)
+            .populate("author", "username profileIcon")
+            .populate("character", "name icon")
+            .populate("recipient", "username profileIcon")
+            .populate({
+                path: "replyTo",
+                populate: [
+                    { path: "author", select: "username avatar profileIcon" },
+                    { path: "character", select: "name icon" }
+                ]
+            })
+            .lean();
+
+        res.json(messages.map(message => normalizeMessagePayload(req, message)));
+    } catch (err) {
+        res.status(500).json({ message: "Internal server error" });
+    }
+};
 </file>
 
 <file path="api-service/app.js">
@@ -3311,7 +5392,8 @@ const app = express();
 
 const allowedOrigins = [
     'https://d-d-platform.vercel.app',
-    'http://localhost:4200'
+    'http://localhost:4200',
+    'http://100.69.189.80:4200'
 ];
 
 app.use(
@@ -3572,7 +5654,7 @@ services:
     ports:
       - "7880:7880"
       - "7881:7881"
-      - "40000-40050:40000-40050/udp"
+      - "40000-42000:40000-42000/udp"
     networks:
       - d-platform-network
 

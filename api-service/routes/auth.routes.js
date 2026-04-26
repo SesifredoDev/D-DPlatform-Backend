@@ -6,6 +6,7 @@ const RefreshToken = require('../models/RefreshToken');
 const {
     generateAccessToken,
     createRefreshToken,
+    getRefreshTokenTtlMs,
     rotateRefreshToken,
 } = require('../services/token.service');
 
@@ -16,6 +17,7 @@ function getRefreshCookieOptions() {
 
     return {
         httpOnly: true,
+        maxAge: getRefreshTokenTtlMs(),
         sameSite: isProduction ? 'none' : 'lax',
         secure: isProduction,
         path: '/',
