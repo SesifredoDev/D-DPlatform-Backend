@@ -46,9 +46,15 @@ exports.buildFileUrl = (req, key) => {
         try {
             const parsed = new URL(key);
             const pathname = parsed.pathname || '';
+            const normalizedOrigin = origin.toLowerCase();
+            const parsedOrigin = parsed.origin.toLowerCase();
 
             if (pathname.startsWith('/api/files/')) {
                 return `${origin}${pathname}${parsed.search || ''}`;
+            }
+
+            if (parsedOrigin !== normalizedOrigin) {
+                return key;
             }
 
             const normalizedPath = pathname.replace(/^\/+/, '');
