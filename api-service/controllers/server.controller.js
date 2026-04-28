@@ -76,6 +76,24 @@ function processUserIcon(req, user) {
     }
 }
 
+function processCharacterFiles(req, character) {
+    if (!character) return;
+
+    if (character.icon) {
+        const storedIcon = normalizeStoredFileValue(character.icon);
+        character.icon = getFileFullUrl(req, storedIcon);
+        character.iconKey = storedIcon;
+        character.iconUrl = getFileFullUrl(req, storedIcon);
+    }
+
+    if (character.pdfLink) {
+        const storedPdf = normalizeStoredFileValue(character.pdfLink);
+        character.pdfLink = getFileFullUrl(req, storedPdf);
+        character.pdfKey = storedPdf;
+        character.pdfLinkUrl = getFileFullUrl(req, storedPdf);
+    }
+}
+
 async function notifyMemberUpdate(req, serverId) {
     if (!publisher.isOpen) return;
     
@@ -97,12 +115,8 @@ async function notifyMemberUpdate(req, serverId) {
              for (const char of characters) {
                  const ownerId = char.ownerId.toString();
                  if (!charactersByOwner[ownerId]) charactersByOwner[ownerId] = [];
+                 processCharacterFiles(req, char);
                  charactersByOwner[ownerId].push(char);
-                 if (char.icon) {
-                     const storedIcon = normalizeStoredFileValue(char.icon);
-                     char.icon = getFileFullUrl(req, storedIcon);
-                     char.iconUrl = getFileFullUrl(req, storedIcon);
-                 }
              }
 
              const members = server.members.map(member => {
@@ -555,12 +569,8 @@ exports.getServerDetails = async (req, res) => {
             if (!charactersByOwner[ownerId]) {
                 charactersByOwner[ownerId] = [];
             }
-            
-            if (char.icon) {
-                const storedIcon = normalizeStoredFileValue(char.icon);
-                char.icon = getFileFullUrl(req, storedIcon);
-                char.iconUrl = getFileFullUrl(req, storedIcon);
-            }
+
+            processCharacterFiles(req, char);
 
             charactersByOwner[ownerId].push(char);
         }
