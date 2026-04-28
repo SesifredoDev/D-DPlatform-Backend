@@ -4,6 +4,7 @@ const Channel = require("../models/Channel.js");
 const Character = require("../models/Character.js");
 const Role = require("../models/Roles.js"); 
 const s3Service = require("../services/s3.service");
+const { buildFileUrl } = require("../utils/fileUrl");
 const sharp = require('sharp');
 const { hasPermission } = require("../utils/permissions");
 const { checkChannelPermission } = require("./channel.controller");
@@ -28,27 +29,7 @@ publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
 publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
 
 function getFileFullUrl(req, key) {
-    if (!key) return null;
-    if (key.startsWith('http')) {
-        try {
-            const parsed = new URL(key);
-            const requestOrigin = `${req.protocol}://${req.get('host')}`;
-            const pathname = parsed.pathname || '';
-
-            if (parsed.origin === requestOrigin && !pathname.startsWith('/api/files/')) {
-                const normalizedPath = pathname.replace(/^\/+/, '');
-                return `${requestOrigin}/api/files/${normalizedPath}`;
-            }
-        } catch {
-            return key;
-        }
-
-        return key;
-    }
-    if (key.startsWith('/api/files/')) {
-        return `${req.protocol}://${req.get('host')}${key}`;
-    }
-    return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+    return buildFileUrl(req, key);
 }
 
 function normalizeStoredFileValue(value) {

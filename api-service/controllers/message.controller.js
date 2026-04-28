@@ -3,6 +3,7 @@ const Channel = require("../models/Channel");
 const Server = require("../models/Server");
 const Role = require("../models/Roles");
 const Character = require("../models/Character");
+const { buildFileUrl } = require("../utils/fileUrl");
 const redis = require('redis');
 
 const publisher = redis.createClient({ 
@@ -22,9 +23,7 @@ publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
 publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
 
 function getFileFullUrl(req, key) {
-    if (!key) return null;
-    if (key.startsWith('http')) return key;
-    return `${req.protocol}://${req.get('host')}/api/files/${key}`;
+    return buildFileUrl(req, key);
 }
 
 function replaceTrailingAttachmentId(url, attachmentId, fileKey) {

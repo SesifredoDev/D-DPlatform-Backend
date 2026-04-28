@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const s3Service = require('../services/s3.service');
+const { buildFileUrl } = require('../utils/fileUrl');
 const sharp = require('sharp');
 
 const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
@@ -46,7 +47,7 @@ exports.uploadProfileIcon = async (req, res) => {
         // Construct the full URL for the response
         const userResponse = user.toObject();
         if (userResponse.profileIcon) {
-            userResponse.profileIconUrl = `${req.protocol}://${req.get('host')}/api/files/${userResponse.profileIcon}`;
+            userResponse.profileIconUrl = buildFileUrl(req, userResponse.profileIcon);
         }
 
         res.json({ message: "Profile icon updated", user: userResponse });
@@ -63,7 +64,7 @@ exports.getMe = async (req, res) => {
 
     // Construct the full URL for the response
     if (user.profileIcon) {
-        user.profileIconUrl = `${req.protocol}://${req.get('host')}/api/files/${user.profileIcon}`;
+        user.profileIconUrl = buildFileUrl(req, user.profileIcon);
     }
 
     res.json(user);

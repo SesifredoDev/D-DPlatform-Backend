@@ -1,5 +1,6 @@
 const getBucket = require("../services/gridfs.service");
 const {Types} = require("mongoose");
+const { buildFileUrl } = require("./fileUrl");
 
 exports.uploadToGridFS = (file, req) => {
     return new Promise((resolve, reject) => {
@@ -16,7 +17,7 @@ exports.uploadToGridFS = (file, req) => {
         uploadStream.end(file.buffer);
 
         uploadStream.on("finish", () => {
-            const fileUrl = `${req.protocol}://${req.get("host")}/api/files/${fileId}`;
+            const fileUrl = buildFileUrl(req, fileId.toString());
             resolve(fileUrl);
         });
 

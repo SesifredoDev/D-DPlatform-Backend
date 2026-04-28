@@ -14,6 +14,7 @@ const messageRoutes = require('./routes/message.routes');
 const spotifyRoutes = require('./routes/spotify.routes');
 
 const app = express();
+app.set('trust proxy', true);
 
 const allowedOrigins = [
     'https://d-d-platform.vercel.app',

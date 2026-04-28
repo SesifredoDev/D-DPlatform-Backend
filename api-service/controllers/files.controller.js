@@ -3,6 +3,7 @@ const sharp = require('sharp');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
+const { buildFileUrl } = require('../utils/fileUrl');
 
 const TEMP_DIR = path.join(os.tmpdir(), 'd-dplatform-uploads');
 const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
@@ -71,7 +72,7 @@ exports.uploadFile = async (req, res) => {
         }
 
         const uploadedAsset = await s3Service.uploadToS3(fileBuffer, filename, contentType);
-        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
+        const fullUrl = buildFileUrl(req, uploadedAsset.key);
 
         res.status(201).json({
             id: uploadedAsset.id,
@@ -148,7 +149,7 @@ exports.finalizeUpload = async (req, res) => {
         }
 
         const uploadedAsset = await s3Service.uploadToS3(finalBuffer, fileName, contentType);
-        const fullUrl = `${req.protocol}://${req.get('host')}/api/files/${uploadedAsset.key}`;
+        const fullUrl = buildFileUrl(req, uploadedAsset.key);
 
         // Cleanup
         await fs.remove(chunkDir).catch(e => console.error("[FilesController] Failed to cleanup chunks:", e));
