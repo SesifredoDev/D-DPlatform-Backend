@@ -30,6 +30,14 @@ function sanitizeFilename(filename) {
     return sanitizedName || fallbackName;
 }
 
+function isStoredFileKey(candidate) {
+    if (!candidate || typeof candidate !== 'string') {
+        return false;
+    }
+
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-.+/i.test(candidate);
+}
+
 function normalizeStoredFileValue(value) {
     if (!value || typeof value !== 'string') {
         return value;
@@ -44,6 +52,11 @@ function normalizeStoredFileValue(value) {
             const parsed = new URL(value);
             if (parsed.pathname.startsWith('/api/files/')) {
                 return parsed.pathname.slice('/api/files/'.length);
+            }
+
+            const pathnameKey = parsed.pathname.replace(/^\/+/, '');
+            if (isStoredFileKey(pathnameKey)) {
+                return pathnameKey;
             }
         } catch {
             return value;
