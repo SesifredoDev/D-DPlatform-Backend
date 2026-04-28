@@ -1,6 +1,6 @@
 const User = require('../models/User');
 const s3Service = require('../services/s3.service');
-const { buildFileUrl } = require('../utils/fileUrl');
+const { buildFileUrl } = require('../utils/serverHelpers');
 const sharp = require('sharp');
 
 const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing

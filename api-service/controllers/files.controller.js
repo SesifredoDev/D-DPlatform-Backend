@@ -3,7 +3,7 @@ const sharp = require('sharp');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
-const { buildFileUrl } = require('../utils/fileUrl');
+const { buildFileUrl } = require('../utils/serverHelpers');
 
 const TEMP_DIR = path.join(os.tmpdir(), 'd-dplatform-uploads');
 const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing

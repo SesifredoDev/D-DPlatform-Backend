@@ -3,7 +3,7 @@ const Channel = require("../models/Channel");
 const Server = require("../models/Server");
 const Role = require("../models/Roles");
 const Character = require("../models/Character");
-const { buildFileUrl } = require("../utils/fileUrl");
+const { buildFileUrl } = require("../utils/serverHelpers");
 const redis = require('redis');
 
 const publisher = redis.createClient({ 

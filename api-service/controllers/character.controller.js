@@ -1,7 +1,7 @@
 const Character = require('../models/Character');
 const mongoose = require("mongoose");
 const s3Service = require('../services/s3.service');
-const { buildFileUrl } = require('../utils/fileUrl');
+const { buildFileUrl } = require('../utils/serverHelpers');
 const sharp = require('sharp');
 const redis = require('redis');
 
