@@ -24,7 +24,22 @@ publisher.connect().catch(err => console.error('Redis Publisher initial connect 
 
 function getFileFullUrl(req, key) {
     if (!key) return null;
-    if (key.startsWith('http')) return key;
+    if (key.startsWith('http')) {
+        try {
+            const parsed = new URL(key);
+            const requestOrigin = `${req.protocol}://${req.get('host')}`;
+            const pathname = parsed.pathname || '';
+
+            if (parsed.origin === requestOrigin && !pathname.startsWith('/api/files/')) {
+                const normalizedPath = pathname.replace(/^\/+/, '');
+                return `${requestOrigin}/api/files/${normalizedPath}`;
+            }
+        } catch {
+            return key;
+        }
+
+        return key;
+    }
     if (key.startsWith('/api/files/')) {
         return `${req.protocol}://${req.get('host')}${key}`;
     }
