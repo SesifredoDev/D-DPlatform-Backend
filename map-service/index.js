@@ -38,6 +38,7 @@ class RoomQueue {
     }
 }
 const roomQueues = new Map();
+const endingRooms = new Set();
 const runInQueue = (roomId, task) => {
     if (!roomQueues.has(roomId)) roomQueues.set(roomId, new RoomQueue());
     return roomQueues.get(roomId).add(task);
@@ -50,6 +51,8 @@ const debug = (msg, data = '') => {
 };
 
 async function checkAndCleanupRoom(roomId, socketId, isDisconnectingEvent = false, client = redisClient) {
+    if (endingRooms.has(roomId)) return;
+
     const room = io.sockets.adapter.rooms.get(roomId);
     const userCount = room ? room.size : 0;
     const isEmpty = isDisconnectingEvent ? userCount <= 1 : userCount === 0;
@@ -138,9 +141,31 @@ async function start(client = redisClient) {
             }
         });
 
-        socket.on('stop-hosting', async (roomId) => {
-            await client.del(`room:${roomId}:host`);
-            socket.to(roomId).emit('host-disconnected');
+        socket.on('stop-hosting', async (roomId, ack) => {
+            if (!client.isOpen) {
+                if (typeof ack === 'function') ack({ ok: false });
+                return;
+            }
+
+            endingRooms.add(roomId);
+
+            try {
+                await client.del(`room:${roomId}`);
+                await client.del(`room:${roomId}:host`);
+                roomQueues.delete(roomId);
+
+                io.to(roomId).except(socket.id).emit('session-ended');
+                setTimeout(() => {
+                    io.in(roomId).except(socket.id).disconnectSockets(true);
+                    endingRooms.delete(roomId);
+                }, 250);
+
+                if (typeof ack === 'function') ack({ ok: true });
+            } catch (error) {
+                endingRooms.delete(roomId);
+                if (typeof ack === 'function') ack({ ok: false });
+                console.error('Failed to stop VTT hosting:', error);
+            }
         });
 
         socket.on('leave-session', async (roomId) => {

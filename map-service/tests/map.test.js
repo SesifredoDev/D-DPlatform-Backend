@@ -160,4 +160,97 @@ describe('Map Service (VTT Sync)', () => {
             });
         });
     });
+
+    test('should close the session and disconnect players when host explicitly stops hosting', (done) => {
+        const roomId = 'test-room-stop';
+        const initialState = { tokens: [], walls: [], gridSize: 50 };
+        let receivedSessionEnded = false;
+        let completed = false;
+
+        const finish = (error) => {
+            if (completed) return;
+            completed = true;
+            done(error);
+        };
+
+        hostSocket = createSocket();
+        playerSocket = createSocket();
+
+        playerSocket.on('session-ended', () => {
+            receivedSessionEnded = true;
+        });
+
+        playerSocket.on('disconnect', () => {
+            try {
+                expect(receivedSessionEnded).toBe(true);
+                expect(redisData.has(`room:${roomId}`)).toBe(false);
+                expect(redisData.has(`room:${roomId}:host`)).toBe(false);
+                finish();
+            } catch (error) {
+                finish(error);
+            }
+        });
+
+        hostSocket.on('connect', () => {
+            hostSocket.emit('host-session', { roomId, initialState });
+            setTimeout(() => {
+                if (playerSocket.connected) {
+                    playerSocket.emit('join-session', { roomId });
+                } else {
+                    playerSocket.once('connect', () => playerSocket.emit('join-session', { roomId }));
+                }
+            }, 50);
+        });
+
+        playerSocket.on('map-update', () => {
+            hostSocket.emit('stop-hosting', roomId);
+        });
+    });
+
+    test('should not close the session when host disconnects accidentally', (done) => {
+        const roomId = 'test-room-host-disconnect';
+        const initialState = { tokens: [], walls: [], gridSize: 50 };
+        let receivedSessionEnded = false;
+        let completed = false;
+
+        const finish = (error) => {
+            if (completed) return;
+            completed = true;
+            done(error);
+        };
+
+        hostSocket = createSocket();
+        playerSocket = createSocket();
+
+        playerSocket.on('session-ended', () => {
+            receivedSessionEnded = true;
+        });
+
+        playerSocket.on('host-disconnected', () => {
+            setTimeout(() => {
+                try {
+                    expect(receivedSessionEnded).toBe(false);
+                    expect(playerSocket.connected).toBe(true);
+                    finish();
+                } catch (error) {
+                    finish(error);
+                }
+            }, 100);
+        });
+
+        hostSocket.on('connect', () => {
+            hostSocket.emit('host-session', { roomId, initialState });
+            setTimeout(() => {
+                if (playerSocket.connected) {
+                    playerSocket.emit('join-session', { roomId });
+                } else {
+                    playerSocket.once('connect', () => playerSocket.emit('join-session', { roomId }));
+                }
+            }, 50);
+        });
+
+        playerSocket.on('map-update', () => {
+            hostSocket.disconnect();
+        });
+    });
 });
