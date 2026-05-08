@@ -123,6 +123,159 @@ describe('Map Service (VTT Sync)', () => {
         });
     });
 
+    test('should sync the player token control mode from the host', (done) => {
+        const roomId = 'test-room-token-control';
+        const initialState = { tokens: [], playersCanControlAllPlayerTokens: false, version: 0 };
+        redisData.set(`room:${roomId}`, JSON.stringify(initialState));
+
+        hostSocket = createSocket();
+        playerSocket = createSocket();
+
+        hostSocket.on('connect', () => {
+            hostSocket.emit('host-session', { roomId });
+
+            playerSocket.on('connect', () => {
+                playerSocket.emit('join-session', { roomId, character: { ownerId: 'player-1' } });
+
+                playerSocket.on('remote-action', (payload) => {
+                    if (payload.action === 'player-token-control-change') {
+                        const state = JSON.parse(redisData.get(`room:${roomId}`));
+                        expect(payload.data.enabled).toBe(true);
+                        expect(state.playersCanControlAllPlayerTokens).toBe(true);
+                        done();
+                    }
+                });
+
+                setTimeout(() => {
+                    hostSocket.emit('sync-action', {
+                        roomId,
+                        action: 'player-token-control-change',
+                        data: { enabled: true }
+                    });
+                }, 100);
+            });
+        });
+    });
+
+    test('should reject moving another player token when shared control is disabled', (done) => {
+        const roomId = 'test-room-own-token-only';
+        const initialState = {
+            tokens: [{ id: 't1', ownerId: 'player-1', isPlayer: true, x: 0, y: 0 }],
+            playersCanControlAllPlayerTokens: false,
+            version: 0
+        };
+        redisData.set(`room:${roomId}`, JSON.stringify(initialState));
+        redisData.set(`room:${roomId}:host`, 'host-socket');
+
+        playerSocket = createSocket();
+        let receivedMove = false;
+
+        playerSocket.on('remote-action', (payload) => {
+            if (payload.action === 'token-move') receivedMove = true;
+        });
+
+        playerSocket.on('connect', () => {
+            playerSocket.emit('join-session', { roomId, character: { ownerId: 'player-2' } });
+        });
+
+        playerSocket.on('map-update', () => {
+            playerSocket.emit('sync-action', {
+                roomId,
+                action: 'token-move',
+                data: { id: 't1', x: 100, y: 100 }
+            });
+
+            setTimeout(() => {
+                const state = JSON.parse(redisData.get(`room:${roomId}`));
+                expect(receivedMove).toBe(false);
+                expect(state.tokens[0].x).toBe(0);
+                expect(state.version).toBe(0);
+                done();
+            }, 100);
+        });
+    });
+
+    test('should allow moving another player token when shared control is enabled', (done) => {
+        const roomId = 'test-room-any-player-token';
+        const initialState = {
+            tokens: [{ id: 't1', ownerId: 'player-1', isPlayer: true, x: 0, y: 0 }],
+            playersCanControlAllPlayerTokens: true,
+            version: 0
+        };
+        redisData.set(`room:${roomId}`, JSON.stringify(initialState));
+        redisData.set(`room:${roomId}:host`, 'host-socket');
+
+        playerSocket = createSocket();
+
+        playerSocket.on('connect', () => {
+            playerSocket.emit('join-session', { roomId, character: { ownerId: 'player-2' } });
+        });
+
+        playerSocket.on('map-update', () => {
+            playerSocket.emit('sync-action', {
+                roomId,
+                action: 'token-move',
+                data: { id: 't1', x: 100, y: 100 }
+            });
+        });
+
+        playerSocket.on('remote-action', (payload) => {
+            if (payload.action === 'token-move') {
+                const state = JSON.parse(redisData.get(`room:${roomId}`));
+                expect(payload.data.id).toBe('t1');
+                expect(state.tokens[0].x).toBe(100);
+                done();
+            }
+        });
+    });
+
+    test('should sync expanded grid settings', (done) => {
+        const roomId = 'test-room-grid-settings';
+        const initialState = { tokens: [], gridSize: 50, version: 0 };
+        redisData.set(`room:${roomId}`, JSON.stringify(initialState));
+
+        hostSocket = createSocket();
+        playerSocket = createSocket();
+
+        hostSocket.on('connect', () => {
+            hostSocket.emit('host-session', { roomId });
+
+            playerSocket.on('connect', () => {
+                playerSocket.emit('join-session', { roomId, character: { ownerId: 'player-1' } });
+
+                playerSocket.on('remote-action', (payload) => {
+                    if (payload.action === 'grid-settings-change') {
+                        const state = JSON.parse(redisData.get(`room:${roomId}`));
+                        expect(payload.data).toEqual({
+                            size: 64,
+                            color: '#ff00aa',
+                            thickness: 2.5,
+                            type: 'hex'
+                        });
+                        expect(state.gridSize).toBe(64);
+                        expect(state.gridColor).toBe('#ff00aa');
+                        expect(state.gridThickness).toBe(2.5);
+                        expect(state.gridType).toBe('hex');
+                        done();
+                    }
+                });
+
+                setTimeout(() => {
+                    hostSocket.emit('sync-action', {
+                        roomId,
+                        action: 'grid-settings-change',
+                        data: {
+                            size: 64,
+                            color: '#ff00aa',
+                            thickness: 2.5,
+                            type: 'hex'
+                        }
+                    });
+                }, 100);
+            });
+        });
+    });
+
     test('should handle turn order updates', (done) => {
         const roomId = 'test-room-4';
         const initialState = { tokens: [], turnOrder: { entries: [] }, version: 0 };

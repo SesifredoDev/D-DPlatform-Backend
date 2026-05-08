@@ -39,6 +39,7 @@ class RoomQueue {
 }
 const roomQueues = new Map();
 const endingRooms = new Set();
+const socketPlayers = new Map();
 const runInQueue = (roomId, task) => {
     if (!roomQueues.has(roomId)) roomQueues.set(roomId, new RoomQueue());
     return roomQueues.get(roomId).add(task);
@@ -48,6 +49,63 @@ const debug = (msg, data = '') => {
     if (process.env.NODE_ENV !== 'test') {
         console.log(`[${new Date().toLocaleTimeString()}] ${msg}`, data);
     }
+};
+
+const normalizeRoomState = (state) => {
+    const raw = {
+        playersCanControlAllPlayerTokens: false,
+        tokens: [],
+        walls: [],
+        gridSize: 50,
+        gridColor: '#cccccc',
+        gridThickness: 1,
+        gridType: 'square',
+        ...(state || {})
+    };
+
+    const gridSize = parseInt(raw.gridSize, 10);
+    const gridThickness = parseFloat(raw.gridThickness);
+
+    return {
+        ...raw,
+        playersCanControlAllPlayerTokens: !!raw.playersCanControlAllPlayerTokens,
+        gridSize: Number.isFinite(gridSize) ? Math.max(8, gridSize) : 50,
+        gridColor: raw.gridColor || '#cccccc',
+        gridThickness: Number.isFinite(gridThickness) ? Math.max(0.25, gridThickness) : 1,
+        gridType: raw.gridType === 'hex' ? 'hex' : 'square'
+    };
+};
+
+const getGridSettingsPayload = (state) => ({
+    size: state.gridSize,
+    color: state.gridColor,
+    thickness: state.gridThickness,
+    type: state.gridType
+});
+
+const getCharacterOwnerId = (character) => {
+    const ownerId = character?.ownerId || character?.owner?._id || character?.owner || character?.userId;
+    return ownerId ? ownerId.toString() : null;
+};
+
+const findToken = (tokens, tokenId) => {
+    if (!Array.isArray(tokens)) return null;
+    return tokens.find(t => t.id?.toString() === tokenId?.toString()) || null;
+};
+
+const isPlayerToken = (token) => !!token && (token.isPlayer === true || !!token.ownerId);
+
+const canSocketMoveToken = (state, socketId, currentHostId, tokenId) => {
+    if (currentHostId === socketId) return true;
+
+    const token = findToken(state.tokens, tokenId);
+    if (!isPlayerToken(token)) return false;
+
+    const socketPlayer = socketPlayers.get(socketId);
+    if (!socketPlayer) return false;
+    if (state.playersCanControlAllPlayerTokens) return true;
+
+    return !!socketPlayer?.userId && token.ownerId?.toString() === socketPlayer.userId;
 };
 
 async function checkAndCleanupRoom(roomId, socketId, isDisconnectingEvent = false, client = redisClient) {
@@ -92,6 +150,7 @@ async function start(client = redisClient) {
         socket.on('host-session', async ({ roomId, initialState }) => {
             debug(`HOST REQUEST for Room: ${roomId}`);
             socket.join(roomId);
+            socketPlayers.set(socket.id, { roomId, userId: null });
 
             if (!client.isOpen) {
                 socket.emit('error', 'Server not ready: Redis connection lost.');
@@ -103,12 +162,12 @@ async function start(client = redisClient) {
             const existingState = await client.get(`room:${roomId}`);
             if (existingState && !initialState) {
                 try {
-                    socket.emit('map-update', JSON.parse(existingState));
+                    socket.emit('map-update', normalizeRoomState(JSON.parse(existingState)));
                 } catch(e) {
                     console.error("Failed to parse existing state");
                 }
             } else {
-                const state = initialState || { tokens: [], walls: [], gridSize: 50 };
+                const state = normalizeRoomState(initialState);
                 state.version = 0;
                 await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
             }
@@ -118,6 +177,7 @@ async function start(client = redisClient) {
 
         socket.on('join-session', async ({ roomId, character }) => {
             debug(`JOIN ATTEMPT: ${socket.id} for Room ${roomId}`);
+            socketPlayers.set(socket.id, { roomId, userId: getCharacterOwnerId(character) });
 
             if (!client.isOpen) {
                 socket.emit('error', 'Server not ready: Redis connection lost.');
@@ -127,7 +187,7 @@ async function start(client = redisClient) {
             let stateRaw = await client.get(`room:${roomId}`);
             if (stateRaw) {
                 try {
-                    let state = JSON.parse(stateRaw);
+                    let state = normalizeRoomState(JSON.parse(stateRaw));
                     socket.join(roomId);
                     socket.emit('map-update', state);
 
@@ -170,6 +230,7 @@ async function start(client = redisClient) {
 
         socket.on('leave-session', async (roomId) => {
             socket.leave(roomId);
+            socketPlayers.delete(socket.id);
             await checkAndCleanupRoom(roomId, socket.id, false, client);
         });
 
@@ -182,15 +243,28 @@ async function start(client = redisClient) {
 
                 let state;
                 try {
-                    state = JSON.parse(stateRaw);
+                    state = normalizeRoomState(JSON.parse(stateRaw));
                 } catch (e) { return; }
+
+                const currentHostId = await client.get(`room:${roomId}:host`);
+
+                if (
+                    ['player-token-control-change', 'grid-size-change', 'grid-settings-change'].includes(action) &&
+                    currentHostId !== socket.id
+                ) {
+                    return;
+                }
+
+                if (action === 'token-move' && !canSocketMoveToken(state, socket.id, currentHostId, data?.id)) {
+                    return;
+                }
 
                 state.version = (state.version || 0) + 1;
 
                 switch(action) {
                     case 'token-move':
                         if (Array.isArray(state.tokens)) {
-                            const token = state.tokens.find(t => t.id === data.id);
+                            const token = findToken(state.tokens, data.id);
                             if (token) { token.x = data.x; token.y = data.y; }
                         }
                         break;
@@ -235,10 +309,24 @@ async function start(client = redisClient) {
                         state.lightingEnabled = data.visible;
                         break;
                     case 'grid-size-change':
-                        state.gridSize = data.size;
+                        state = normalizeRoomState({ ...state, gridSize: data?.size });
+                        break;
+                    case 'grid-settings-change':
+                        state = normalizeRoomState({
+                            ...state,
+                            gridSize: data?.size,
+                            gridColor: data?.color,
+                            gridThickness: data?.thickness,
+                            gridType: data?.type
+                        });
+                        data = getGridSettingsPayload(state);
+                        break;
+                    case 'player-token-control-change':
+                        state.playersCanControlAllPlayerTokens = !!data?.enabled;
+                        data = { enabled: state.playersCanControlAllPlayerTokens };
                         break;
                     case 'map-load':
-                        state = { ...state, ...data };
+                        state = normalizeRoomState({ ...state, ...(data || {}) });
                         break;
                     case 'turn-order-sync':
                         state.turnOrder = data;
@@ -278,13 +366,14 @@ async function start(client = redisClient) {
             const stateRaw = await client.get(`room:${roomId}`);
             if (stateRaw) {
                 try {
-                    socket.emit('map-update', JSON.parse(stateRaw));
+                    socket.emit('map-update', normalizeRoomState(JSON.parse(stateRaw)));
                 } catch(e) {}
             }
         });
 
         socket.on('disconnecting', async () => {
             debug(`Disconnecting: ${socket.id}`);
+            socketPlayers.delete(socket.id);
             for (const roomId of socket.rooms) {
                 if (roomId === socket.id) continue;
                 await checkAndCleanupRoom(roomId, socket.id, true, client);
