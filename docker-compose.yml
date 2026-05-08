@@ -3,6 +3,7 @@ services:
     build: ./api-service
     env_file: .env.${NODE_ENV}
     init: true
+    restart: unless-stopped
     ports:
       - "5000:3000"
     environment:
@@ -16,6 +17,7 @@ services:
     build: ./messaging-service
     env_file: .env.${NODE_ENV}
     init: true
+    restart: unless-stopped
     ports:
       - "3001:3001"
     depends_on:
@@ -25,6 +27,7 @@ services:
 
   map-service:
     build: ./map-service
+    restart: unless-stopped
     ports:
       - "3003:3003"
     networks:
@@ -48,6 +51,7 @@ services:
 
   nginx:
     image: nginx:alpine
+    restart: unless-stopped
     volumes:
       - ./${NGINX_CONF:-nginx.local.conf}:/etc/nginx/nginx.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
@@ -56,11 +60,17 @@ services:
       - "443:443"
     networks:
       - d-platform-network
+    depends_on:
+      - api-service
+      - messaging-service
+      - map-service
+      - livekit
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
   redis:
     image: redis:alpine
+    restart: unless-stopped
     networks:
       - d-platform-network
 
