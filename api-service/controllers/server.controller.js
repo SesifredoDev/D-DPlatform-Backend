@@ -104,6 +104,7 @@ async function notifyMemberUpdate(req, serverId) {
                  processUserIcon(req, member.user);
                  return {
                      ...member,
+                     temporaryDm: normalizeTemporaryDmGrant(member.temporaryDm),
                      characters: charactersByOwner[member.user._id.toString()] || []
                  }
              });
@@ -121,6 +122,37 @@ async function notifyMemberUpdate(req, serverId) {
 
 function generateJoinCode() {
     return crypto.randomBytes(4).toString("hex");
+}
+
+const TEMPORARY_DM_DURATIONS = {
+    day: 24 * 60 * 60 * 1000,
+    week: 7 * 24 * 60 * 60 * 1000,
+    month: 30 * 24 * 60 * 60 * 1000
+};
+
+function getTemporaryDmExpiresAt(duration) {
+    if (duration === 'permanent') return null;
+    const durationMs = TEMPORARY_DM_DURATIONS[duration];
+    if (!durationMs) return undefined;
+    return new Date(Date.now() + durationMs);
+}
+
+function normalizeTemporaryDmGrant(grant) {
+    if (!grant?.enabled) {
+        return { enabled: false, expiresAt: null, grantedBy: null, grantedAt: null };
+    }
+
+    const expiresAt = grant.expiresAt ? new Date(grant.expiresAt) : null;
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+        return { enabled: false, expiresAt: null, grantedBy: null, grantedAt: null };
+    }
+
+    return {
+        enabled: true,
+        expiresAt,
+        grantedBy: grant.grantedBy || null,
+        grantedAt: grant.grantedAt || null
+    };
 }
 
 async function handleIconUpload(file) {
@@ -431,6 +463,62 @@ exports.updateMemberRoles = async (req, res) => {
         res.status(500).json({ message: "Error updating member roles", error: error.message });
     }
 };
+
+exports.updateTemporaryDm = async (req, res) => {
+    const userId = req.user.id;
+    const { serverId, memberId } = req.params;
+    const { duration } = req.body;
+
+    try {
+        const server = await Server.findById(serverId);
+        if (!server) return res.status(404).json({ message: "Server not found" });
+
+        if (server.owner.toString() !== userId) {
+            return res.status(403).json({ message: "Only the server owner can manage temporary DMs" });
+        }
+
+        const targetMember = server.members.find(m => m.user.toString() === memberId);
+        if (!targetMember) {
+            return res.status(404).json({ message: "Member not found in this server" });
+        }
+
+        if (server.owner.toString() === memberId) {
+            return res.status(400).json({ message: "The server owner is already the DM" });
+        }
+
+        if (duration === 'none' || duration === 'revoke') {
+            targetMember.temporaryDm = {
+                enabled: false,
+                expiresAt: null,
+                grantedBy: null,
+                grantedAt: null
+            };
+        } else {
+            const expiresAt = getTemporaryDmExpiresAt(duration);
+            if (expiresAt === undefined) {
+                return res.status(400).json({ message: "Invalid temporary DM duration" });
+            }
+
+            targetMember.temporaryDm = {
+                enabled: true,
+                expiresAt,
+                grantedBy: userId,
+                grantedAt: new Date()
+            };
+        }
+
+        await server.save();
+        await notifyMemberUpdate(req, serverId);
+
+        res.json({
+            message: "Temporary DM updated",
+            memberId,
+            temporaryDm: normalizeTemporaryDmGrant(targetMember.temporaryDm)
+        });
+    } catch (error) {
+        res.status(500).json({ message: "Error updating temporary DM", error: error.message });
+    }
+};
 /**
  * DELETE SERVER (STRICT OWNER ONLY)
  */
@@ -560,6 +648,7 @@ exports.getServerDetails = async (req, res) => {
             processUserIcon(req, member.user);
             return {
                 ...member,
+                temporaryDm: normalizeTemporaryDmGrant(member.temporaryDm),
                 characters: charactersByOwner[member.user._id.toString()] || []
             }
         });

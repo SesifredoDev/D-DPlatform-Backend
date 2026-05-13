@@ -21,6 +21,12 @@ const ServerSchema = new mongoose.Schema({
         {
             user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
             roles: [{ type: mongoose.Schema.Types.ObjectId, ref: "Role" }],
+            temporaryDm: {
+                enabled: { type: Boolean, default: false },
+                expiresAt: { type: Date, default: null },
+                grantedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+                grantedAt: { type: Date, default: null }
+            },
             joinedAt: { type: Date, default: Date.now }
         }
     ],

@@ -203,13 +203,39 @@ describe('Map Service (VTT Sync)', () => {
             version: 0
         };
         redisData.set(`room:${roomId}`, JSON.stringify(initialState));
-        redisData.set(`room:${roomId}:host`, 'host-socket');
 
+        hostSocket = createSocket();
         playerSocket = createSocket();
+        let hostReady = false;
+        let playerJoined = false;
 
-        playerSocket.on('connect', () => {
+        const joinPlayer = () => {
+            if (!hostReady || playerJoined || !playerSocket.connected) return;
+            playerJoined = true;
             playerSocket.emit('join-session', { roomId, character: { ownerId: 'player-2' } });
+        };
+
+        hostSocket.on('host-action-request', (payload) => {
+            expect(payload.action).toBe('token-move');
+            const pendingState = JSON.parse(redisData.get(`room:${roomId}`));
+            expect(pendingState.tokens[0].x).toBe(0);
+            hostSocket.emit('sync-action', {
+                roomId,
+                action: payload.action,
+                data: payload.data
+            });
         });
+
+        hostSocket.on('connect', () => {
+            hostSocket.emit('host-session', { roomId });
+        });
+
+        hostSocket.on('map-update', () => {
+            hostReady = true;
+            joinPlayer();
+        });
+
+        playerSocket.on('connect', joinPlayer);
 
         playerSocket.on('map-update', () => {
             playerSocket.emit('sync-action', {

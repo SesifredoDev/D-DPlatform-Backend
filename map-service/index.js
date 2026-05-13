@@ -60,6 +60,7 @@ const normalizeRoomState = (state) => {
         gridColor: '#cccccc',
         gridThickness: 1,
         gridType: 'square',
+        lightingEnabled: false,
         ...(state || {})
     };
 
@@ -72,7 +73,8 @@ const normalizeRoomState = (state) => {
         gridSize: Number.isFinite(gridSize) ? Math.max(8, gridSize) : 50,
         gridColor: raw.gridColor || '#cccccc',
         gridThickness: Number.isFinite(gridThickness) ? Math.max(0.25, gridThickness) : 1,
-        gridType: raw.gridType === 'hex' ? 'hex' : 'square'
+        gridType: raw.gridType === 'hex' ? 'hex' : 'square',
+        lightingEnabled: !!raw.lightingEnabled
     };
 };
 
@@ -88,6 +90,10 @@ const getCharacterOwnerId = (character) => {
     return ownerId ? ownerId.toString() : null;
 };
 
+const EPHEMERAL_ACTIONS = new Set(['measure-sync', 'ping']);
+const PLAYER_TOKEN_ACTIONS = new Set(['token-move', 'token-update', 'token-deleted']);
+const PLAYER_TURN_ACTIONS = new Set(['turn-order-add', 'turn-order-remove']);
+
 const findToken = (tokens, tokenId) => {
     if (!Array.isArray(tokens)) return null;
     return tokens.find(t => t.id?.toString() === tokenId?.toString()) || null;
@@ -95,7 +101,7 @@ const findToken = (tokens, tokenId) => {
 
 const isPlayerToken = (token) => !!token && (token.isPlayer === true || !!token.ownerId);
 
-const canSocketMoveToken = (state, socketId, currentHostId, tokenId) => {
+const canSocketControlToken = (state, socketId, currentHostId, tokenId) => {
     if (currentHostId === socketId) return true;
 
     const token = findToken(state.tokens, tokenId);
@@ -106,6 +112,42 @@ const canSocketMoveToken = (state, socketId, currentHostId, tokenId) => {
     if (state.playersCanControlAllPlayerTokens) return true;
 
     return !!socketPlayer?.userId && token.ownerId?.toString() === socketPlayer.userId;
+};
+
+const canSocketAddToken = (socketId, data) => {
+    const socketPlayer = socketPlayers.get(socketId);
+    const ownerId = data?.options?.ownerId?.toString();
+
+    return !!socketPlayer?.userId &&
+        !!ownerId &&
+        ownerId === socketPlayer.userId &&
+        data?.options?.isPlayer !== false;
+};
+
+const canSocketUpdateTurnOrder = (state, socketId, action, data) => {
+    if (action === 'turn-order-add') return true;
+
+    const socketPlayer = socketPlayers.get(socketId);
+    if (!socketPlayer?.userId || !state.turnOrder?.entries) return false;
+
+    const entry = state.turnOrder.entries.find(e => e.id?.toString() === data?.id?.toString());
+    return !!entry && entry.userId?.toString() === socketPlayer.userId;
+};
+
+const canSocketRequestHostAction = (state, socketId, currentHostId, action, data) => {
+    if (currentHostId === socketId) return true;
+    if (EPHEMERAL_ACTIONS.has(action)) return true;
+    if (PLAYER_TOKEN_ACTIONS.has(action)) {
+        return canSocketControlToken(state, socketId, currentHostId, data?.id);
+    }
+    if (action === 'token-added') {
+        return canSocketAddToken(socketId, data);
+    }
+    if (PLAYER_TURN_ACTIONS.has(action)) {
+        return canSocketUpdateTurnOrder(state, socketId, action, data);
+    }
+
+    return false;
 };
 
 async function checkAndCleanupRoom(roomId, socketId, isDisconnectingEvent = false, client = redisClient) {
@@ -159,20 +201,36 @@ async function start(client = redisClient) {
 
             await client.set(`room:${roomId}:host`, socket.id, { EX: 86400 });
 
-            const existingState = await client.get(`room:${roomId}`);
-            if (existingState && !initialState) {
+            const existingStateRaw = await client.get(`room:${roomId}`);
+            let existingVersion = 0;
+
+            if (existingStateRaw) {
                 try {
-                    socket.emit('map-update', normalizeRoomState(JSON.parse(existingState)));
+                    existingVersion = normalizeRoomState(JSON.parse(existingStateRaw)).version || 0;
+                } catch(e) {
+                    console.error("Failed to parse existing state");
+                }
+            }
+
+            if (initialState) {
+                const state = normalizeRoomState(initialState);
+                state.version = existingVersion + 1;
+                await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
+                io.to(roomId).emit('map-update', state);
+            } else if (existingStateRaw) {
+                try {
+                    socket.emit('map-update', normalizeRoomState(JSON.parse(existingStateRaw)));
                 } catch(e) {
                     console.error("Failed to parse existing state");
                 }
             } else {
-                const state = normalizeRoomState(initialState);
+                const state = normalizeRoomState(null);
                 state.version = 0;
                 await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
+                socket.emit('map-update', state);
             }
 
-            socket.to(roomId).emit('host-changed', { hostId: socket.id });
+            io.to(roomId).emit('host-changed', { hostId: socket.id });
         });
 
         socket.on('join-session', async ({ roomId, character }) => {
@@ -234,32 +292,76 @@ async function start(client = redisClient) {
             await checkAndCleanupRoom(roomId, socket.id, false, client);
         });
 
-        socket.on('sync-action', ({ roomId, action, data }) => {
+        socket.on('sync-action', ({ roomId, action, data }, ack) => {
             runInQueue(roomId, async () => {
-                if (!client.isOpen) return;
+                const respond = (payload) => {
+                    if (typeof ack === 'function') ack(payload);
+                };
+
+                if (!client.isOpen) {
+                    respond({ ok: false, reason: 'server-not-ready' });
+                    return;
+                }
 
                 const stateRaw = await client.get(`room:${roomId}`);
-                if (!stateRaw) return;
+                if (!stateRaw) {
+                    respond({ ok: false, reason: 'room-not-found' });
+                    return;
+                }
 
                 let state;
                 try {
                     state = normalizeRoomState(JSON.parse(stateRaw));
-                } catch (e) { return; }
-
-                const currentHostId = await client.get(`room:${roomId}:host`);
-
-                if (
-                    ['player-token-control-change', 'grid-size-change', 'grid-settings-change'].includes(action) &&
-                    currentHostId !== socket.id
-                ) {
+                } catch (e) {
+                    respond({ ok: false, reason: 'corrupt-state' });
                     return;
                 }
 
-                if (action === 'token-move' && !canSocketMoveToken(state, socket.id, currentHostId, data?.id)) {
+                const currentHostId = await client.get(`room:${roomId}:host`);
+
+                if (EPHEMERAL_ACTIONS.has(action)) {
+                    socket.to(roomId).emit('remote-action', {
+                        action,
+                        data,
+                        sourceId: socket.id
+                    });
+                    respond({ ok: true, ephemeral: true });
+                    return;
+                }
+
+                if (!currentHostId) {
+                    io.to(roomId).emit('host-disconnected');
+                    respond({ ok: false, reason: 'host-missing' });
+                    return;
+                }
+
+                if (!canSocketRequestHostAction(state, socket.id, currentHostId, action, data)) {
+                    respond({ ok: false, reason: 'forbidden' });
+                    return;
+                }
+
+                if (currentHostId !== socket.id) {
+                    const hostSocket = io.sockets.sockets.get(currentHostId);
+                    if (!hostSocket) {
+                        await client.del(`room:${roomId}:host`);
+                        io.to(roomId).emit('host-disconnected');
+                        respond({ ok: false, reason: 'host-missing' });
+                        return;
+                    }
+
+                    hostSocket.emit('host-action-request', {
+                        roomId,
+                        action,
+                        data,
+                        requesterId: socket.id
+                    });
+                    respond({ ok: true, queued: true });
                     return;
                 }
 
                 state.version = (state.version || 0) + 1;
+                let outgoingAction = action;
+                let outgoingData = data;
 
                 switch(action) {
                     case 'token-move':
@@ -283,14 +385,16 @@ async function start(client = redisClient) {
                         break;
                     case 'token-added':
                         if (!state.tokens) state.tokens = [];
-                        state.tokens.push({
-                            id: data.options.id,
-                            x: data.x,
-                            y: data.y,
-                            ownerId: data.options.ownerId,
-                            icon: data.options.icon,
-                            ...data.options
-                        });
+                        if (!findToken(state.tokens, data.options.id)) {
+                            state.tokens.push({
+                                id: data.options.id,
+                                x: data.x,
+                                y: data.y,
+                                ownerId: data.options.ownerId,
+                                icon: data.options.icon,
+                                ...data.options
+                            });
+                        }
                         break;
                     case 'token-deleted':
                         if (state.tokens) {
@@ -307,9 +411,11 @@ async function start(client = redisClient) {
                         break;
                     case 'lighting-toggle':
                         state.lightingEnabled = data.visible;
+                        outgoingData = { visible: !!state.lightingEnabled };
                         break;
                     case 'grid-size-change':
                         state = normalizeRoomState({ ...state, gridSize: data?.size });
+                        outgoingData = { size: state.gridSize };
                         break;
                     case 'grid-settings-change':
                         state = normalizeRoomState({
@@ -319,17 +425,21 @@ async function start(client = redisClient) {
                             gridThickness: data?.thickness,
                             gridType: data?.type
                         });
-                        data = getGridSettingsPayload(state);
+                        outgoingData = getGridSettingsPayload(state);
                         break;
                     case 'player-token-control-change':
                         state.playersCanControlAllPlayerTokens = !!data?.enabled;
-                        data = { enabled: state.playersCanControlAllPlayerTokens };
+                        outgoingData = { enabled: state.playersCanControlAllPlayerTokens };
                         break;
                     case 'map-load':
+                        const mapLoadVersion = state.version;
                         state = normalizeRoomState({ ...state, ...(data || {}) });
+                        state.version = mapLoadVersion;
+                        outgoingData = state;
                         break;
                     case 'turn-order-sync':
                         state.turnOrder = data;
+                        outgoingData = state.turnOrder;
                         break;
                     case 'turn-order-add':
                         if (!state.turnOrder) {
@@ -339,8 +449,8 @@ async function start(client = redisClient) {
                         if (state.turnOrder.isConfirmed) {
                             state.turnOrder.entries.sort((a, b) => b.initiative - a.initiative);
                         }
-                        action = 'turn-order-sync';
-                        data = state.turnOrder;
+                        outgoingAction = 'turn-order-sync';
+                        outgoingData = state.turnOrder;
                         break;
                     case 'turn-order-remove':
                         if (state.turnOrder && state.turnOrder.entries) {
@@ -351,13 +461,19 @@ async function start(client = redisClient) {
                                 state.turnOrder.activeIndex = 0;
                             }
                         }
-                        action = 'turn-order-sync';
-                        data = state.turnOrder;
+                        outgoingAction = 'turn-order-sync';
+                        outgoingData = state.turnOrder;
                         break;
                 }
 
                 await client.set(`room:${roomId}`, JSON.stringify(state), { EX: 86400 });
-                io.to(roomId).emit('remote-action', { action, data, version: state.version });
+                io.to(roomId).emit('remote-action', {
+                    action: outgoingAction,
+                    data: outgoingData,
+                    version: state.version,
+                    sourceId: socket.id
+                });
+                respond({ ok: true, version: state.version });
             });
         });
 

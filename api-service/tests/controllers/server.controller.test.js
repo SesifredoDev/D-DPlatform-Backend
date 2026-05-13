@@ -145,4 +145,85 @@ describe('Server Controller', () => {
             expect(res.status).toHaveBeenCalledWith(403);
         });
     });
+
+    describe('updateTemporaryDm', () => {
+        it('should allow owner to grant temporary DM for a week', async () => {
+            const targetMember = { user: { toString: () => 'targetUser' }, roles: [] };
+            const mockServer = {
+                _id: 'server123',
+                owner: { toString: () => 'user123' },
+                members: [
+                    { user: { toString: () => 'user123' }, roles: [] },
+                    targetMember
+                ],
+                save: jest.fn().mockResolvedValue()
+            };
+
+            req.params = { serverId: 'server123', memberId: 'targetUser' };
+            req.body = { duration: 'week' };
+            Server.findById
+                .mockReturnValueOnce(mockQuery(mockServer))
+                .mockReturnValue(mockQuery({
+                    ...mockServer,
+                    members: [{ user: { _id: 'targetUser', username: 'Target' }, roles: [], temporaryDm: targetMember.temporaryDm }]
+                }));
+
+            await serverController.updateTemporaryDm(req, res);
+
+            expect(targetMember.temporaryDm.enabled).toBe(true);
+            expect(targetMember.temporaryDm.expiresAt).toBeInstanceOf(Date);
+            expect(mockServer.save).toHaveBeenCalled();
+            expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+                memberId: 'targetUser',
+                temporaryDm: expect.objectContaining({ enabled: true })
+            }));
+        });
+
+        it('should allow owner to revoke temporary DM', async () => {
+            const targetMember = {
+                user: { toString: () => 'targetUser' },
+                roles: [],
+                temporaryDm: { enabled: true, expiresAt: null, grantedBy: 'user123', grantedAt: new Date() }
+            };
+            const mockServer = {
+                _id: 'server123',
+                owner: { toString: () => 'user123' },
+                members: [targetMember],
+                save: jest.fn().mockResolvedValue()
+            };
+
+            req.params = { serverId: 'server123', memberId: 'targetUser' };
+            req.body = { duration: 'none' };
+            Server.findById
+                .mockReturnValueOnce(mockQuery(mockServer))
+                .mockReturnValue(mockQuery({
+                    ...mockServer,
+                    members: [{ user: { _id: 'targetUser', username: 'Target' }, roles: [], temporaryDm: targetMember.temporaryDm }]
+                }));
+
+            await serverController.updateTemporaryDm(req, res);
+
+            expect(targetMember.temporaryDm.enabled).toBe(false);
+            expect(targetMember.temporaryDm.expiresAt).toBeNull();
+            expect(mockServer.save).toHaveBeenCalled();
+        });
+
+        it('should prevent non-owner from granting temporary DM', async () => {
+            const mockServer = {
+                _id: 'server123',
+                owner: { toString: () => 'owner123' },
+                members: [{ user: { toString: () => 'targetUser' }, roles: [] }],
+                save: jest.fn().mockResolvedValue()
+            };
+
+            req.params = { serverId: 'server123', memberId: 'targetUser' };
+            req.body = { duration: 'day' };
+            Server.findById.mockReturnValue(mockQuery(mockServer));
+
+            await serverController.updateTemporaryDm(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(403);
+            expect(mockServer.save).not.toHaveBeenCalled();
+        });
+    });
 });

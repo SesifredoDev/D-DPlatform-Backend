@@ -15,6 +15,7 @@ const {
     updateRole,
     deleteRole,
     updateMemberRoles,
+    updateTemporaryDm,
     getOrCreateWhisperChannel,
     refreshJoinCode
 } = require( "../controllers/server.controller.js");
@@ -40,6 +41,7 @@ router.post("/:serverId/role", auth, createRole);
 router.patch("/:serverId/role/:roleId", auth, updateRole)
 router.delete("/:serverId/role/:roleId", auth, deleteRole)
 router.post("/:serverId/role/member/:memberId", auth, updateMemberRoles)
+router.post("/:serverId/temporary-dm/:memberId", auth, updateTemporaryDm)
 
 router.post("/:serverId/refresh-join-code", auth, refreshJoinCode);
 
