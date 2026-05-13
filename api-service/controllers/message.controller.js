@@ -4,6 +4,7 @@ const Server = require("../models/Server");
 const Role = require("../models/Roles");
 const Character = require("../models/Character");
 const { buildFileUrl } = require("../utils/serverHelpers");
+const { checkChannelPermission } = require("./channel.controller");
 const redis = require('redis');
 
 const publisher = redis.createClient({ 
@@ -168,24 +169,12 @@ const canPerformAction = async (serverId, userId, channel, permissionName) => {
     const server = await Server.findById(serverId);
     if (!server) return false;
 
-    if (server.owner.toString() === userId) return true;
+    if (server.owner?.toString() === userId) return true;
 
-    const member = server.members.find(m => m.user.toString() === userId);
+    const member = (server.members || []).find(m => m.user.toString() === userId);
     if (!member) return false;
 
-    const memberRoles = await Role.find({ _id: { $in: member.roles } });
-
-    if (memberRoles.some(r => r.permissions.ADMINISTRATOR)) return true;
-
-    const roleIds = member.roles.map(id => id.toString());
-    const overwrites = channel.permissionOverwrites.filter(ow =>
-        roleIds.includes(ow.role.toString())
-    );
-
-    if (overwrites.some(ow => ow.deny.includes(permissionName))) return false;
-    if (overwrites.some(ow => ow.allow.includes(permissionName))) return true;
-
-    return memberRoles.some(r => r.permissions[permissionName] === true);
+    return checkChannelPermission(server, member, channel, permissionName);
 };
 
 /* ===== SEND MESSAGE ===== */
@@ -197,6 +186,17 @@ exports.sendMessage = async (req, res) => {
 
         const channel = await Channel.findById(channelId);
         if (!channel) return res.status(404).json({ message: "Channel not found" });
+
+        if (channel.type === 'whisper') {
+            const server = await Server.findById(channel.server);
+            if (!server) return res.status(404).json({ message: "Server not found" });
+
+            const isServerOwner = server.owner.toString() === userId;
+            const isChannelRecipient = channel.recipient?.toString() === userId;
+            if (!isServerOwner && !isChannelRecipient) {
+                return res.status(403).json({ message: "Access denied" });
+            }
+        }
 
         const canSend = await canPerformAction(
             channel.server,

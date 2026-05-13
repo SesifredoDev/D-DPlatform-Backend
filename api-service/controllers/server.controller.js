@@ -657,22 +657,24 @@ exports.getServerDetails = async (req, res) => {
 
         const allChannels = await Channel.find({ server: serverId }).sort({ position: 1 });
 
-        const visibleChannels = [];
-        for (const channel of allChannels) {
-            if (channel.type === 'whisper') {
-                if (server.owner.toString() === userId || channel.recipient.toString() === userId) {
-                    if (channel.recipient.toString() === userId && server.owner.toString() !== userId) {
-                         channel.name = "DM Whisper";
-                    }
-                    visibleChannels.push(channel);
-                }
-            } else {
-                const canView = await checkChannelPermission(server, member, channel, "READ_MESSAGE_HISTORY");
-                if (canView) {
-                    visibleChannels.push(channel);
-                }
-            }
-        }
+          const canManageChannels = await hasPermission(server, member, "MANAGE_CHANNELS");
+          const visibleChannels = [];
+          for (const channel of allChannels) {
+              if (channel.type === 'whisper') {
+                  const recipientId = channel.recipient?.toString();
+                  if (server.owner.toString() === userId || recipientId === userId) {
+                      if (recipientId === userId && server.owner.toString() !== userId) {
+                           channel.name = "DM Whisper";
+                      }
+                      visibleChannels.push(channel);
+                  }
+              } else {
+                  const canView = await checkChannelPermission(server, member, channel, "READ_MESSAGE_HISTORY");
+                  if (canView || canManageChannels) {
+                      visibleChannels.push(channel);
+                  }
+              }
+          }
 
         res.json({
             ...responseServer,

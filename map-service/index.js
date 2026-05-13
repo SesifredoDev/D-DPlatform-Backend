@@ -233,6 +233,38 @@ async function start(client = redisClient) {
             io.to(roomId).emit('host-changed', { hostId: socket.id });
         });
 
+        socket.on('session-status', async ({ roomId }, ack) => {
+            const respond = (payload) => {
+                if (typeof ack === 'function') ack(payload);
+            };
+
+            if (!client.isOpen) {
+                respond({ ok: false, active: false, hasHost: false, hostId: null, reason: 'server-not-ready' });
+                return;
+            }
+
+            const stateRaw = await client.get(`room:${roomId}`);
+            const hostId = await client.get(`room:${roomId}:host`);
+            let version = 0;
+
+            if (stateRaw) {
+                try {
+                    version = normalizeRoomState(JSON.parse(stateRaw)).version || 0;
+                } catch (e) {
+                    respond({ ok: false, active: false, hasHost: false, hostId: null, reason: 'corrupt-state' });
+                    return;
+                }
+            }
+
+            respond({
+                ok: true,
+                active: !!stateRaw,
+                hasHost: !!hostId,
+                hostId: hostId || null,
+                version
+            });
+        });
+
         socket.on('join-session', async ({ roomId, character }) => {
             debug(`JOIN ATTEMPT: ${socket.id} for Room ${roomId}`);
             socketPlayers.set(socket.id, { roomId, userId: getCharacterOwnerId(character) });
