@@ -29,9 +29,14 @@ const {
 const {getVideoRoomMetadata} = require("../controllers/channel.controller");
 
 
-router.post("/", auth, upload.fields([{ name: 'icon', maxCount: 1 }]), createServer);
+const serverUploadFields = [
+    { name: 'icon', maxCount: 1 },
+    { name: 'themeBackgroundImage', maxCount: 1 }
+];
+
+router.post("/", auth, upload.fields(serverUploadFields), createServer);
 router.post("/join", auth, joinServer);
-router.post("/:serverId/update/", auth, upload.fields([{ name: 'icon', maxCount: 1 }]),updateServer )
+router.post("/:serverId/update/", auth, upload.fields(serverUploadFields),updateServer )
 router.get("/list", auth, getUserServers)
 router.post("/:serverId/leave", auth, leaveServer);
 router.delete("/:serverId", auth, deleteServer);

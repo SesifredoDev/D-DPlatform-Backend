@@ -12,6 +12,24 @@ const redis = require('redis');
 
 const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
 
+const SERVER_THEME_FONT_FAMILIES = new Set([
+    '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    'Roboto, "Helvetica Neue", Arial, sans-serif',
+    '"Segoe UI", Arial, sans-serif',
+    'Georgia, "Times New Roman", serif',
+    '"Roboto Mono", "Courier New", monospace'
+]);
+
+const DEFAULT_SERVER_THEME = Object.freeze({
+    backgroundColor: '#121212',
+    textColor: '#eef0f6',
+    fontFamily: '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    backgroundImage: null,
+    backgroundImageBlur: false
+});
+
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
 const publisher = redis.createClient({ 
     url: process.env.REDIS_URL || 'redis://redis:6379',
     socket: {
@@ -37,13 +55,53 @@ function normalizeStoredFileValue(value) {
     return s3Service.normalizeStoredFileValue(value);
 }
 
+function normalizeHexColor(value, fallback) {
+    return typeof value === 'string' && HEX_COLOR_PATTERN.test(value.trim())
+        ? value.trim()
+        : fallback;
+}
+
+function normalizeServerTheme(value) {
+    const theme = value && typeof value === 'object' ? value : {};
+    const fontFamily = typeof theme.fontFamily === 'string' && SERVER_THEME_FONT_FAMILIES.has(theme.fontFamily.trim())
+        ? theme.fontFamily.trim()
+        : DEFAULT_SERVER_THEME.fontFamily;
+
+    return {
+        backgroundColor: normalizeHexColor(theme.backgroundColor, DEFAULT_SERVER_THEME.backgroundColor),
+        textColor: normalizeHexColor(theme.textColor, DEFAULT_SERVER_THEME.textColor),
+        fontFamily,
+        backgroundImage: normalizeStoredFileValue(theme.backgroundImage) || DEFAULT_SERVER_THEME.backgroundImage,
+        backgroundImageBlur: theme.backgroundImageBlur === true
+    };
+}
+
+function parseServerThemePayload(payload) {
+    if (payload === undefined) return undefined;
+
+    if (typeof payload === 'string') {
+        const trimmedPayload = payload.trim();
+        if (!trimmedPayload) return undefined;
+        return normalizeServerTheme(JSON.parse(trimmedPayload));
+    }
+
+    return normalizeServerTheme(payload);
+}
+
 function toServerResponse(req, server) {
     const serverObj = typeof server.toObject === 'function' ? server.toObject() : { ...server };
     const storedIcon = normalizeStoredFileValue(serverObj.icon);
+    const defaultTheme = normalizeServerTheme(serverObj.defaultTheme);
+    const storedBackgroundImage = normalizeStoredFileValue(defaultTheme.backgroundImage);
 
     return {
         ...serverObj,
         icon: getFileFullUrl(req, storedIcon),
+        defaultTheme: {
+            ...defaultTheme,
+            backgroundImage: getFileFullUrl(req, storedBackgroundImage),
+            backgroundImageKey: storedBackgroundImage
+        },
         iconKey: storedIcon,
         iconUrl: getFileFullUrl(req, storedIcon)
     };
@@ -188,16 +246,28 @@ async function handleIconUpload(file) {
  */
 exports.createServer = async (req, res) => {
     const userId = req.user.id;
-    const { name, icon } = req.body;
+    const { name, icon, defaultTheme: defaultThemePayload } = req.body;
     let iconKey = normalizeStoredFileValue(icon);
+    let defaultTheme;
+
+    try {
+        defaultTheme = parseServerThemePayload(defaultThemePayload);
+    } catch (error) {
+        return res.status(400).json({ message: "Invalid server theme payload" });
+    }
 
     if (req.files && req.files.icon) {
         iconKey = await handleIconUpload(req.files.icon[0]);
     }
 
+    if (defaultTheme && req.files && req.files.themeBackgroundImage) {
+        defaultTheme.backgroundImage = await handleIconUpload(req.files.themeBackgroundImage[0]);
+    }
+
     const server = await Server.create({
         name,
         icon: iconKey,
+        ...(defaultTheme && { defaultTheme }),
         owner: userId,
         joinCode: generateJoinCode(),
     });
@@ -397,7 +467,14 @@ exports.deleteRole = async (req, res) => {
 exports.updateServer = async (req, res) => {
     const userId = req.user.id;
     const { serverId } = req.params;
-    const { name, icon } = req.body;
+    const { name, icon, defaultTheme: defaultThemePayload } = req.body;
+    let defaultTheme;
+
+    try {
+        defaultTheme = parseServerThemePayload(defaultThemePayload);
+    } catch (error) {
+        return res.status(400).json({ message: "Invalid server theme payload" });
+    }
 
     const server = await Server.findById(serverId);
     if (!server) return res.status(404).json({ message: "Server not found" });
@@ -414,7 +491,12 @@ exports.updateServer = async (req, res) => {
         server.icon = normalizeStoredFileValue(icon);
     }
 
+    if (defaultTheme && req.files && req.files.themeBackgroundImage) {
+        defaultTheme.backgroundImage = await handleIconUpload(req.files.themeBackgroundImage[0]);
+    }
+
     if (name) server.name = name;
+    if (defaultTheme) server.defaultTheme = defaultTheme;
 
     await server.save();
     
@@ -554,6 +636,7 @@ exports.getUserServers= async (req, res) => {
             _id: response._id,
             name: response.name,
             icon: response.icon,
+            defaultTheme: response.defaultTheme,
             iconKey: response.iconKey,
             iconUrl: response.iconUrl
         };
