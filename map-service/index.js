@@ -51,11 +51,57 @@ const debug = (msg, data = '') => {
     }
 };
 
+const normalizeFxEffect = (effect) => {
+    if (!effect || typeof effect !== 'object') return null;
+
+    const type = ['polygon', 'square', 'circle'].includes(effect.type) ? effect.type : null;
+    if (!type) return null;
+
+    const color = typeof effect.color === 'string' && /^#[0-9a-f]{6}$/i.test(effect.color)
+        ? effect.color
+        : '#6fd6ff';
+    const seed = Number.isFinite(Number(effect.seed)) ? Number(effect.seed) : Math.floor(Math.random() * 1000000000);
+    const opacity = Number.isFinite(Number(effect.opacity))
+        ? Math.max(0.1, Math.min(1, Number(effect.opacity)))
+        : 0.82;
+    const base = {
+        id: effect.id?.toString() || `fx-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+        type,
+        color,
+        seed,
+        opacity
+    };
+
+    if (type === 'circle') {
+        const radius = Number(effect.radius);
+        if (!Number.isFinite(radius) || radius <= 0) return null;
+        return { ...base, x: Number(effect.x) || 0, y: Number(effect.y) || 0, radius };
+    }
+
+    if (type === 'square') {
+        const width = Number(effect.width);
+        const height = Number(effect.height);
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+        return { ...base, x: Number(effect.x) || 0, y: Number(effect.y) || 0, width, height };
+    }
+
+    const points = Array.isArray(effect.points)
+        ? effect.points.map(value => Number(value)).filter(value => Number.isFinite(value)).slice(0, 200)
+        : [];
+    return points.length >= 6 ? { ...base, points } : null;
+};
+
+const normalizeFxEffects = (effects) => Array.isArray(effects)
+    ? effects.map(normalizeFxEffect).filter(Boolean).slice(0, 200)
+    : [];
+
 const normalizeRoomState = (state) => {
     const raw = {
         playersCanControlAllPlayerTokens: false,
+        playersCanUseFx: false,
         tokens: [],
         walls: [],
+        fxEffects: [],
         gridSize: 50,
         gridColor: '#cccccc',
         gridThickness: 1,
@@ -70,6 +116,8 @@ const normalizeRoomState = (state) => {
     return {
         ...raw,
         playersCanControlAllPlayerTokens: !!raw.playersCanControlAllPlayerTokens,
+        playersCanUseFx: !!raw.playersCanUseFx,
+        fxEffects: normalizeFxEffects(raw.fxEffects),
         gridSize: Number.isFinite(gridSize) ? Math.max(8, gridSize) : 50,
         gridColor: raw.gridColor || '#cccccc',
         gridThickness: Number.isFinite(gridThickness) ? Math.max(0.25, gridThickness) : 1,
@@ -93,6 +141,8 @@ const getCharacterOwnerId = (character) => {
 const EPHEMERAL_ACTIONS = new Set(['measure-sync', 'ping']);
 const PLAYER_TOKEN_ACTIONS = new Set(['token-move', 'token-update', 'token-deleted']);
 const PLAYER_TURN_ACTIONS = new Set(['turn-order-add', 'turn-order-remove']);
+const FX_ACTIONS = new Set(['fx-added', 'fx-deleted', 'fx-cleared']);
+const SERVER_AUTHORED_ACTIONS = new Set([...FX_ACTIONS]);
 
 const findToken = (tokens, tokenId) => {
     if (!Array.isArray(tokens)) return null;
@@ -145,6 +195,9 @@ const canSocketRequestHostAction = (state, socketId, currentHostId, action, data
     }
     if (PLAYER_TURN_ACTIONS.has(action)) {
         return canSocketUpdateTurnOrder(state, socketId, action, data);
+    }
+    if (FX_ACTIONS.has(action)) {
+        return !!state.playersCanUseFx;
     }
 
     return false;
@@ -372,7 +425,7 @@ async function start(client = redisClient) {
                     return;
                 }
 
-                if (currentHostId !== socket.id) {
+                if (currentHostId !== socket.id && !SERVER_AUTHORED_ACTIONS.has(action)) {
                     const hostSocket = io.sockets.sockets.get(currentHostId);
                     if (!hostSocket) {
                         await client.del(`room:${roomId}:host`);
@@ -462,6 +515,31 @@ async function start(client = redisClient) {
                     case 'player-token-control-change':
                         state.playersCanControlAllPlayerTokens = !!data?.enabled;
                         outgoingData = { enabled: state.playersCanControlAllPlayerTokens };
+                        break;
+                    case 'player-fx-permission-change':
+                        state.playersCanUseFx = !!data?.enabled;
+                        outgoingData = { enabled: state.playersCanUseFx };
+                        break;
+                    case 'fx-added':
+                        if (!state.fxEffects) state.fxEffects = [];
+                        {
+                            const effect = normalizeFxEffect(data);
+                            if (effect) {
+                                state.fxEffects = state.fxEffects.filter(existing => existing.id !== effect.id);
+                                state.fxEffects.push(effect);
+                                outgoingData = effect;
+                            }
+                        }
+                        break;
+                    case 'fx-deleted':
+                        if (state.fxEffects) {
+                            state.fxEffects = state.fxEffects.filter(effect => effect.id !== data?.id);
+                        }
+                        outgoingData = { id: data?.id };
+                        break;
+                    case 'fx-cleared':
+                        state.fxEffects = [];
+                        outgoingData = {};
                         break;
                     case 'map-load':
                         const mapLoadVersion = state.version;
