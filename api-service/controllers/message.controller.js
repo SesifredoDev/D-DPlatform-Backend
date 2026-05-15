@@ -23,6 +23,39 @@ const publisher = redis.createClient({
 publisher.on('error', (err) => console.error('Redis Publisher Error:', err));
 publisher.connect().catch(err => console.error('Redis Publisher initial connect failed:', err));
 
+const DEFAULT_INITIAL_MESSAGE_LIMIT = 20;
+const DEFAULT_OLDER_MESSAGE_LIMIT = 5;
+const MAX_MESSAGE_HISTORY_LIMIT = 100;
+
+function parsePositiveInt(value, fallback) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getConfiguredMessageLimit(envName, fallback) {
+    return Math.min(
+        parsePositiveInt(process.env[envName], fallback),
+        MAX_MESSAGE_HISTORY_LIMIT
+    );
+}
+
+function getMessageHistoryLimit(req) {
+    const hasBeforeCursor = Boolean(req.query?.before);
+    const defaultLimit = hasBeforeCursor
+        ? getConfiguredMessageLimit('MESSAGE_HISTORY_OLDER_LIMIT', DEFAULT_OLDER_MESSAGE_LIMIT)
+        : getConfiguredMessageLimit('MESSAGE_HISTORY_INITIAL_LIMIT', DEFAULT_INITIAL_MESSAGE_LIMIT);
+    const requestedLimit = parsePositiveInt(req.query?.limit, defaultLimit);
+
+    return Math.min(requestedLimit, MAX_MESSAGE_HISTORY_LIMIT);
+}
+
+function parseBeforeCursor(value) {
+    if (!value) return null;
+
+    const before = new Date(value);
+    return Number.isNaN(before.getTime()) ? null : before;
+}
+
 function getFileFullUrl(req, key) {
     return buildFileUrl(req, key);
 }
@@ -330,6 +363,12 @@ exports.getMessages = async (req, res) => {
     try {
         const userId = req.user.id;
         const { channelId } = req.params;
+        const limit = getMessageHistoryLimit(req);
+        const before = req.query?.before ? parseBeforeCursor(req.query.before) : null;
+
+        if (req.query?.before && !before) {
+            return res.status(400).json({ message: "Invalid before cursor" });
+        }
 
         const channel = await Channel.findById(channelId);
         if (!channel) return res.status(404).json({ message: "Channel not found" });
@@ -371,9 +410,13 @@ exports.getMessages = async (req, res) => {
             }
         }
 
+        if (before) {
+            query.createdAt = { $lt: before };
+        }
+
         const messages = await Message.find(query)
             .sort({ createdAt: -1 })
-            .limit(50)
+            .limit(limit)
             .populate("author", "username profileIcon")
             .populate("character", "name icon")
             .populate("recipient", "username profileIcon")

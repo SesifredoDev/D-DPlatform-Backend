@@ -29,6 +29,7 @@ describe('Message Controller', () => {
             user: { id: 'user123' },
             params: { channelId: 'channel123', messageId: 'msg123' },
             body: { content: 'Hello', emoji: '😀' },
+            query: {},
             protocol: 'http',
             get: jest.fn().mockReturnValue('localhost')
         };
@@ -39,6 +40,8 @@ describe('Message Controller', () => {
         };
 
         jest.clearAllMocks();
+        process.env.MESSAGE_HISTORY_INITIAL_LIMIT = '20';
+        process.env.MESSAGE_HISTORY_OLDER_LIMIT = '5';
     });
 
     describe('sendMessage', () => {
@@ -79,6 +82,62 @@ describe('Message Controller', () => {
                 recipient: null
             });
             expect(mockMessage.populate).toHaveBeenCalled();
+            expect(res.status).toHaveBeenCalledWith(201);
+            expect(res.json).toHaveBeenCalledWith({
+                ...payload,
+                channelId: 'channel123'
+            });
+        });
+
+        it('creates a message when only attachments are provided', async () => {
+            const attachment = {
+                id: 'file123',
+                key: 'file123-map.png',
+                url: 'http://localhost/files/file123-map.png',
+                name: 'map.png',
+                filename: 'map.png',
+                contentType: 'image/png'
+            };
+            req.body = {
+                content: '',
+                attachments: [attachment]
+            };
+
+            Channel.findById.mockResolvedValue({
+                _id: 'channel123',
+                server: 'server123',
+                permissionOverwrites: []
+            });
+            Server.findById.mockResolvedValue({
+                _id: 'server123',
+                owner: { toString: () => 'user123' }
+            });
+
+            const payload = {
+                _id: 'msg123',
+                content: '',
+                attachments: [attachment],
+                author: { _id: 'user123' }
+            };
+            const mockMessage = {
+                populate: jest.fn().mockResolvedValue(),
+                toObject: jest.fn().mockReturnValue(payload)
+            };
+            Message.create.mockResolvedValue(mockMessage);
+
+            await messageController.sendMessage(req, res);
+
+            expect(Message.create).toHaveBeenCalledWith({
+                channel: 'channel123',
+                server: 'server123',
+                author: 'user123',
+                character: null,
+                content: '',
+                attachments: [attachment],
+                replyTo: null,
+                isWhisper: false,
+                recipient: null
+            });
             expect(res.status).toHaveBeenCalledWith(201);
             expect(res.json).toHaveBeenCalledWith({
                 ...payload,
@@ -179,7 +238,7 @@ describe('Message Controller', () => {
 
             expect(Message.find).toHaveBeenCalledWith({ channel: 'channel123' });
             expect(chain.sort).toHaveBeenCalledWith({ createdAt: -1 });
-            expect(chain.limit).toHaveBeenCalledWith(50);
+            expect(chain.limit).toHaveBeenCalledWith(20);
             expect(res.json).toHaveBeenCalledWith(messages);
         });
 
@@ -249,6 +308,48 @@ describe('Message Controller', () => {
                     { recipient: 'user123' }
                 ]
             });
+            expect(res.json).toHaveBeenCalledWith([]);
+        });
+
+        it('loads the older message page before the supplied cursor', async () => {
+            req.query = { before: '2026-05-15T12:00:00.000Z' };
+
+            Channel.findById.mockResolvedValue({
+                _id: 'channel123',
+                server: 'server123',
+                type: 'text',
+                permissionOverwrites: []
+            });
+            Server.findById
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                })
+                .mockResolvedValueOnce({
+                    _id: 'server123',
+                    owner: { toString: () => 'owner123' },
+                    members: [{ user: { toString: () => 'user123' }, roles: [] }]
+                });
+            Role.find.mockResolvedValue([
+                { permissions: { READ_MESSAGE_HISTORY: true } }
+            ]);
+
+            const chain = buildQueryChain([]);
+            Message.find.mockReturnValue(chain);
+
+            await messageController.getMessages(req, res);
+
+            expect(Message.find).toHaveBeenCalledWith({
+                channel: 'channel123',
+                $or: [
+                    { isWhisper: { $ne: true } },
+                    { author: 'user123' },
+                    { recipient: 'user123' }
+                ],
+                createdAt: { $lt: new Date('2026-05-15T12:00:00.000Z') }
+            });
+            expect(chain.limit).toHaveBeenCalledWith(5);
             expect(res.json).toHaveBeenCalledWith([]);
         });
     });

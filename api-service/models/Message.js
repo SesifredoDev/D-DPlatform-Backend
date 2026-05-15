@@ -12,7 +12,7 @@ const MessageSchema = new mongoose.Schema({
         default: null
     },
 
-    content: { type: String, required: true },
+    content: { type: String, default: '' },
     attachments: [{
         id: String,
         key: String,
