@@ -1,4 +1,4 @@
-const Message = require("../models/Message");
+﻿const Message = require("../models/Message");
 const Channel = require("../models/Channel");
 const Server = require("../models/Server");
 const Role = require("../models/Roles");
@@ -114,6 +114,11 @@ function extractFilenameFromUrl(url) {
     }
 }
 
+function normalizeAttachmentSize(value) {
+    const numericSize = Number(value);
+    return Number.isFinite(numericSize) && numericSize >= 0 ? numericSize : undefined;
+}
+
 function normalizeAttachment(req, attachment) {
     if (!attachment) return null;
 
@@ -129,7 +134,8 @@ function normalizeAttachment(req, attachment) {
         url,
         name: attachment.name || filename,
         filename,
-        contentType: attachment.contentType || 'application/octet-stream'
+        contentType: attachment.contentType || 'application/octet-stream',
+        size: normalizeAttachmentSize(attachment.size)
     };
 }
 
@@ -434,4 +440,5 @@ exports.getMessages = async (req, res) => {
         res.status(500).json({ message: "Internal server error" });
     }
 };
+
 

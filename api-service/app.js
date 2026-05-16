@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const { AccessToken } = require('livekit-server-sdk');
@@ -52,7 +52,7 @@ app.use(
             'Cache-Control', 
             'Range'
         ],
-        exposedHeaders: ['Content-Range', 'X-Content-Range'],
+        exposedHeaders: ['Content-Range', 'X-Content-Range', 'Content-Length', 'Content-Disposition'],
     })
 );
 
@@ -152,3 +152,4 @@ app.get('/livekit/token', auth, async (req, res) => {
 });
 
 module.exports = app;
+
