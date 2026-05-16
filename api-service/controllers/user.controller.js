@@ -5,9 +5,36 @@ const sharp = require('sharp');
 
 const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
 
+function normalizeStoredFileValue(value) {
+    return s3Service.normalizeStoredFileValue(value);
+}
+
+function toUserResponse(req, user) {
+    if (!user) return null;
+
+    const userResponse = typeof user.toObject === 'function'
+        ? user.toObject()
+        : { ...user };
+
+    if (userResponse.profileIcon) {
+        const storedIcon = normalizeStoredFileValue(userResponse.profileIcon);
+        const profileIconUrl = buildFileUrl(req, storedIcon);
+
+        userResponse.profileIcon = profileIconUrl;
+        userResponse.profileIconUrl = profileIconUrl;
+        userResponse.profileIconKey = storedIcon;
+    }
+
+    return userResponse;
+}
+
 exports.uploadProfileIcon = async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    if (!req.file.mimetype?.startsWith('image/')) {
+        return res.status(400).json({ message: "Profile icon must be an image" });
     }
 
     try {
@@ -44,12 +71,9 @@ exports.uploadProfileIcon = async (req, res) => {
             { new: true }
         ).select("-password");
 
-        // Construct the full URL for the response
-        const userResponse = user.toObject();
-        if (userResponse.profileIcon) {
-            userResponse.profileIconUrl = buildFileUrl(req, userResponse.profileIcon);
-        }
+        if (!user) return res.sendStatus(404);
 
+        const userResponse = toUserResponse(req, user);
         res.json({ message: "Profile icon updated", user: userResponse });
     } catch (error) {
         console.error("[UserController] Upload error:", error);
@@ -62,10 +86,5 @@ exports.getMe = async (req, res) => {
 
     if (!user) return res.sendStatus(404);
 
-    // Construct the full URL for the response
-    if (user.profileIcon) {
-        user.profileIconUrl = buildFileUrl(req, user.profileIcon);
-    }
-
-    res.json(user);
+    res.json(toUserResponse(req, user));
 };

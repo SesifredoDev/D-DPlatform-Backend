@@ -138,7 +138,7 @@ const getCharacterOwnerId = (character) => {
     return ownerId ? ownerId.toString() : null;
 };
 
-const EPHEMERAL_ACTIONS = new Set(['measure-sync', 'ping']);
+const EPHEMERAL_ACTIONS = new Set(['measure-sync', 'ping', 'pointer-sync']);
 const PLAYER_TOKEN_ACTIONS = new Set(['token-move', 'token-update', 'token-deleted']);
 const PLAYER_TURN_ACTIONS = new Set(['turn-order-add', 'turn-order-remove']);
 const FX_ACTIONS = new Set(['fx-added', 'fx-deleted', 'fx-cleared']);
@@ -378,11 +378,26 @@ async function start(client = redisClient) {
         });
 
         socket.on('sync-action', ({ roomId, action, data }, ack) => {
-            runInQueue(roomId, async () => {
-                const respond = (payload) => {
-                    if (typeof ack === 'function') ack(payload);
-                };
+            const respond = (payload) => {
+                if (typeof ack === 'function') ack(payload);
+            };
 
+            if (EPHEMERAL_ACTIONS.has(action)) {
+                if (!roomId) {
+                    respond({ ok: false, reason: 'room-required' });
+                    return;
+                }
+
+                socket.to(roomId).emit('remote-action', {
+                    action,
+                    data,
+                    sourceId: socket.id
+                });
+                respond({ ok: true, ephemeral: true });
+                return;
+            }
+
+            runInQueue(roomId, async () => {
                 if (!client.isOpen) {
                     respond({ ok: false, reason: 'server-not-ready' });
                     return;
@@ -404,15 +419,6 @@ async function start(client = redisClient) {
 
                 const currentHostId = await client.get(`room:${roomId}:host`);
 
-                if (EPHEMERAL_ACTIONS.has(action)) {
-                    socket.to(roomId).emit('remote-action', {
-                        action,
-                        data,
-                        sourceId: socket.id
-                    });
-                    respond({ ok: true, ephemeral: true });
-                    return;
-                }
 
                 if (!currentHostId) {
                     io.to(roomId).emit('host-disconnected');

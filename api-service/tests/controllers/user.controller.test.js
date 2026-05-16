@@ -19,6 +19,7 @@ describe('User Controller', () => {
             json: jest.fn().mockReturnThis(),
             sendStatus: jest.fn().mockReturnThis()
         };
+        s3Service.normalizeStoredFileValue.mockImplementation(value => value);
         jest.spyOn(console, 'warn').mockImplementation(() => {});
     });
 
@@ -45,6 +46,8 @@ describe('User Controller', () => {
             expect(User.findById).toHaveBeenCalledWith('user123');
             expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
                 username: 'testuser',
+                profileIcon: 'http://localhost/api/files/icon.png',
+                profileIconKey: 'icon.png',
                 profileIconUrl: 'http://localhost/api/files/icon.png'
             }));
         });
@@ -67,6 +70,20 @@ describe('User Controller', () => {
             await userController.uploadProfileIcon(req, res);
             expect(res.status).toHaveBeenCalledWith(400);
             expect(res.json).toHaveBeenCalledWith({ message: "No file uploaded" });
+        });
+
+        it('should return 400 if the uploaded file is not an image', async () => {
+            req.file = {
+                buffer: Buffer.from('test'),
+                mimetype: 'application/pdf',
+                originalname: 'sheet.pdf',
+                size: 1000
+            };
+
+            await userController.uploadProfileIcon(req, res);
+
+            expect(res.status).toHaveBeenCalledWith(400);
+            expect(res.json).toHaveBeenCalledWith({ message: "Profile icon must be an image" });
         });
 
         it('should upload to S3 and update user', async () => {
@@ -94,7 +111,12 @@ describe('User Controller', () => {
             expect(s3Service.uploadToS3).toHaveBeenCalled();
             expect(User.findByIdAndUpdate).toHaveBeenCalled();
             expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-                message: "Profile icon updated"
+                message: "Profile icon updated",
+                user: expect.objectContaining({
+                    profileIcon: 'http://localhost/api/files/s3-key',
+                    profileIconKey: 's3-key',
+                    profileIconUrl: 'http://localhost/api/files/s3-key'
+                })
             }));
         });
     });
