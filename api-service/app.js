@@ -20,8 +20,9 @@ const { checkChannelPermission } = require('./controllers/channel.controller');
 const app = express();
 app.set('trust proxy', true);
 
-const allowedOrigins = [
+const defaultAllowedOrigins = [
     'https://d-d-platform.vercel.app',
+    'https://dissertation.pchaffey.me',
     'http://localhost:4200',
     'http://localhost:4201',
     'http://127.0.0.1:4201',
@@ -29,15 +30,31 @@ const allowedOrigins = [
     'http://100.69.189.80:4200'
 ];
 
+const configuredAllowedOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.CORS_ORIGINS
+]
+    .filter(Boolean)
+    .flatMap((value) => value.split(','))
+    .map((origin) => origin.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+const allowedOrigins = Array.from(new Set([
+    ...defaultAllowedOrigins,
+    ...configuredAllowedOrigins
+]));
+
 app.use(
     cors({
         origin: function(origin, callback) {
             // Allow requests with no origin (like mobile apps or curl)
             if (!origin) return callback(null, true);
-            if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+            const normalizedOrigin = origin.replace(/\/+$/, '');
+            if (allowedOrigins.includes(normalizedOrigin) || allowedOrigins.includes('*')) {
                 return callback(null, true);
             }
             var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            console.warn(`Blocked CORS request from origin: ${normalizedOrigin}`);
             return callback(new Error(msg), false);
         },
         credentials: true,
