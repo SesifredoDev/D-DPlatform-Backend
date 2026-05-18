@@ -23,6 +23,8 @@ app.set('trust proxy', true);
 const allowedOrigins = [
     'https://d-d-platform.vercel.app',
     'http://localhost:4200',
+    'http://localhost:4201',
+    'http://127.0.0.1:4201',
     'https://ddplatform.localhost',
     'http://100.69.189.80:4200'
 ];
