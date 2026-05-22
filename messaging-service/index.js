@@ -32,8 +32,53 @@ subscriber.on('error', (err) => {
     }
 });
 
-// Map to store userId to socketId mapping
+// Map to store userId to socketId mapping. A user can have multiple sockets
+// open at once (chat view, side-panel badges, multiple windows).
 const userSocketMap = new Map();
+
+function addUserSocket(userId, socketId) {
+    if (!userId || !socketId) return;
+
+    const key = userId.toString();
+    const current = userSocketMap.get(key);
+    if (current instanceof Set) {
+        current.add(socketId);
+        return;
+    }
+
+    if (current) {
+        userSocketMap.set(key, new Set([current, socketId]));
+        return;
+    }
+
+    userSocketMap.set(key, new Set([socketId]));
+}
+
+function removeUserSocket(userId, socketId) {
+    if (!userId || !socketId) return;
+
+    const key = userId.toString();
+    const current = userSocketMap.get(key);
+    if (current instanceof Set) {
+        current.delete(socketId);
+        if (current.size === 0) {
+            userSocketMap.delete(key);
+        }
+        return;
+    }
+
+    if (current === socketId) {
+        userSocketMap.delete(key);
+    }
+}
+
+function getUserSocketIds(userId) {
+    if (!userId) return [];
+
+    const current = userSocketMap.get(userId.toString());
+    if (!current) return [];
+    return current instanceof Set ? Array.from(current) : [current];
+}
 
 async function start(redisClient = subscriber) {
     try {
@@ -51,16 +96,15 @@ async function start(redisClient = subscriber) {
                     const recipientId = data.recipient?._id || data.recipient;
 
                     if (data.isWhisper && recipientId && authorId) {
-                        // It's a whisper, emit only to sender and recipient
-                        const senderSocketId = userSocketMap.get(authorId.toString());
-                        const recipientSocketId = userSocketMap.get(recipientId.toString());
+                        // It's a whisper, emit only to every socket owned by sender and recipient.
+                        const targetSocketIds = new Set([
+                            ...getUserSocketIds(authorId),
+                            ...getUserSocketIds(recipientId)
+                        ]);
 
-                        if (senderSocketId) {
-                            io.to(senderSocketId).emit('new_message', data);
-                        }
-                        if (recipientSocketId && recipientSocketId !== senderSocketId) { 
-                            io.to(recipientSocketId).emit('new_message', data);
-                        }
+                        targetSocketIds.forEach(socketId => {
+                            io.to(socketId).emit('new_message', data);
+                        });
                     } else {
                         // Regular message, emit to the channel room
                         io.to(data.channelId).emit('new_message', data);
@@ -96,10 +140,10 @@ io.on('connection', (socket) => {
     // Retrieve userId from socket.handshake.auth (frontend needs to send this)
     const userId = socket.handshake.auth.userId;
     if (userId) {
-        userSocketMap.set(userId.toString(), socket.id);
+        addUserSocket(userId, socket.id);
 
         socket.on('disconnect', () => {
-            userSocketMap.delete(userId.toString());
+            removeUserSocket(userId, socket.id);
         });
     }
 
@@ -107,8 +151,16 @@ io.on('connection', (socket) => {
         socket.join(channelId);
     });
 
+    socket.on('leave_channel', (channelId) => {
+        socket.leave(channelId);
+    });
+
     socket.on('join_server', (serverId) => {
         socket.join(`server:${serverId}`);
+    });
+
+    socket.on('leave_server', (serverId) => {
+        socket.leave(`server:${serverId}`);
     });
 });
 
@@ -150,5 +202,6 @@ module.exports = {
     subscriber,
     start,
     shutdown,
-    userSocketMap
+    userSocketMap,
+    getUserSocketIds
 };

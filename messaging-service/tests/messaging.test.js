@@ -1,4 +1,4 @@
-const { server, io, start, shutdown, userSocketMap } = require('../index');
+const { server, io, start, shutdown, userSocketMap, getUserSocketIds } = require('../index');
 const ioClient = require('socket.io-client');
 const http = require('http');
 
@@ -50,7 +50,30 @@ afterEach(() => {
 describe('Messaging Service', () => {
     test('should map userId to socketId on connection', () => {
         expect(userSocketMap.has('user123')).toBe(true);
-        expect(userSocketMap.get('user123')).toBe(clientSocket.id);
+        expect(getUserSocketIds('user123')).toContain(clientSocket.id);
+    });
+
+    test('should keep all sockets for the same user', (done) => {
+        const port = server.address().port;
+        const secondSocket = ioClient(`http://localhost:${port}`, {
+            path: '/socket.io/',
+            auth: { userId: 'user123' },
+            forceNew: true
+        });
+
+        secondSocket.on('connect', () => {
+            expect(getUserSocketIds('user123')).toEqual(expect.arrayContaining([
+                clientSocket.id,
+                secondSocket.id
+            ]));
+
+            secondSocket.disconnect();
+            setTimeout(() => {
+                expect(getUserSocketIds('user123')).toContain(clientSocket.id);
+                expect(getUserSocketIds('user123')).not.toContain(secondSocket.id);
+                done();
+            }, 100);
+        });
     });
 
     test('should join channel room', (done) => {
@@ -64,6 +87,21 @@ describe('Messaging Service', () => {
         }, 100);
     });
 
+    test('should leave channel room', (done) => {
+        const channelId = 'channel_A';
+        clientSocket.emit('join_channel', channelId);
+
+        setTimeout(() => {
+            clientSocket.emit('leave_channel', channelId);
+
+            setTimeout(() => {
+                const socket = io.sockets.sockets.get(clientSocket.id);
+                expect(socket.rooms.has(channelId)).toBe(false);
+                done();
+            }, 100);
+        }, 100);
+    });
+
     test('should join server room', (done) => {
         const serverId = 'server_B';
         clientSocket.emit('join_server', serverId);
@@ -72,6 +110,21 @@ describe('Messaging Service', () => {
             const socket = io.sockets.sockets.get(clientSocket.id);
             expect(socket.rooms.has(`server:${serverId}`)).toBe(true);
             done();
+        }, 100);
+    });
+
+    test('should leave server room', (done) => {
+        const serverId = 'server_B';
+        clientSocket.emit('join_server', serverId);
+
+        setTimeout(() => {
+            clientSocket.emit('leave_server', serverId);
+
+            setTimeout(() => {
+                const socket = io.sockets.sockets.get(clientSocket.id);
+                expect(socket.rooms.has(`server:${serverId}`)).toBe(false);
+                done();
+            }, 100);
         }, 100);
     });
 
