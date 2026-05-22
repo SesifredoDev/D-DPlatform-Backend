@@ -131,6 +131,11 @@ function processCharacterFiles(req, character) {
         character.pdfKey = storedPdf;
         character.pdfLinkUrl = getFileFullUrl(req, storedPdf);
     }
+
+    if (character.ddbPdfLink) {
+        character.ddbPdfLink = normalizeStoredFileValue(character.ddbPdfLink);
+        character.ddbPdfLinkUrl = character.ddbPdfLink;
+    }
 }
 
 async function notifyMemberUpdate(req, serverId) {

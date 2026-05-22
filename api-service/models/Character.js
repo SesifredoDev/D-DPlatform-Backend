@@ -19,6 +19,10 @@ const CharacterSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    ddbPdfLink: {
+        type: String,
+        default: null
+    },
     pdfLink: {
         type: String, // Optional PDF Link
         default: null

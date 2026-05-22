@@ -1,5 +1,24 @@
 const axios = require('axios');
 
+function isAllowedDdbSheetPdfUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+        return false;
+    }
+
+    try {
+        const parsed = new URL(rawUrl);
+        const hostname = parsed.hostname.toLowerCase();
+        const pathname = parsed.pathname.toLowerCase();
+
+        return parsed.protocol === 'https:' &&
+            (hostname === 'www.dndbeyond.com' || hostname === 'dndbeyond.com') &&
+            pathname.startsWith('/sheet-pdfs/') &&
+            pathname.endsWith('.pdf');
+    } catch {
+        return false;
+    }
+}
+
 const getCharacter = async (req, res) => {
     const query = req.params.query;
     const charId = query.includes('characters/') ? query.split('/').pop() : query;
@@ -59,6 +78,7 @@ function parseSurfaceInfo(data) {
     };
 
     const dexMod = Math.floor((stats.dexterity - 10) / 2);
+    const ddbPdfLink = getDdbPdfLink(data);
     console.log(data.username)
     return {
         id: data.id,
@@ -67,6 +87,8 @@ function parseSurfaceInfo(data) {
         icon: data.decorations?.avatarUrl || data.avatarUrl,
         baseStats: stats,
         username: data.username,
+        ddbPdfLink,
+        pdfLink: ddbPdfLink,
         // Classes and Subclasses mapping
         classes: data.classes.map(c => ({
             className: c.definition.name,
@@ -78,4 +100,58 @@ function parseSurfaceInfo(data) {
     };
 }
 
-module.exports = { getCharacter };
+function getDdbPdfLink(data) {
+    if (!data?.id || !data?.username) return null;
+
+    const username = encodeURIComponent(data.username);
+    return `https://www.dndbeyond.com/sheet-pdfs/${username}_${data.id}.pdf`;
+}
+
+const proxySheetPdf = async (req, res) => {
+    const pdfUrl = req.query.url;
+    if (!isAllowedDdbSheetPdfUrl(pdfUrl)) {
+        return res.status(400).json({ error: "Invalid D&D Beyond PDF URL" });
+    }
+
+    try {
+        const headers = {
+            Accept: 'application/pdf',
+            Referer: 'https://www.dndbeyond.com/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+        };
+
+        if (req.headers.range) {
+            headers.Range = req.headers.range;
+        }
+
+        const response = await axios.get(pdfUrl, {
+            responseType: 'stream',
+            headers,
+            validateStatus: status => status >= 200 && status < 300
+        });
+
+        res.status(response.status);
+        res.set('Content-Type', response.headers['content-type'] || 'application/pdf');
+        res.set('Content-Disposition', 'inline; filename="dndbeyond-character-sheet.pdf"');
+        if (response.headers['content-length']) res.set('Content-Length', response.headers['content-length']);
+        if (response.headers['accept-ranges']) res.set('Accept-Ranges', response.headers['accept-ranges']);
+        if (response.headers['content-range']) res.set('Content-Range', response.headers['content-range']);
+        res.set('Cache-Control', 'private, max-age=300');
+
+        response.data.on('error', error => {
+            console.error('DDB PDF stream error:', error);
+            if (!res.headersSent) {
+                res.status(502).json({ error: "Failed to stream D&D Beyond PDF" });
+            }
+        });
+        response.data.pipe(res);
+    } catch (error) {
+        const status = error.response?.status;
+        console.error('Failed to proxy DDB PDF:', error.message);
+        if (!res.headersSent) {
+            res.status(status === 404 ? 404 : 502).json({ error: "Could not fetch D&D Beyond PDF" });
+        }
+    }
+};
+
+module.exports = { getCharacter, proxySheetPdf, isAllowedDdbSheetPdfUrl };

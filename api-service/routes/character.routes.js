@@ -6,10 +6,18 @@ const auth = require('../middleware/auth.middleware');
 
 router.post('/',
     auth,
-    upload.fields([{ name: 'icon', maxCount: 1 }, { name: 'pdf', maxCount: 1 }]),
+    upload.fields([
+        { name: 'icon', maxCount: 1 },
+        { name: 'pdf', maxCount: 1 },
+        { name: 'ddbPdf', maxCount: 1 }
+    ]),
     characterController.createCharacter
 );
-router.put('/:id',auth, upload.fields([{ name: 'icon', maxCount: 1 }, { name: 'pdf', maxCount: 1 }]),
+router.put('/:id',auth, upload.fields([
+        { name: 'icon', maxCount: 1 },
+        { name: 'pdf', maxCount: 1 },
+        { name: 'ddbPdf', maxCount: 1 }
+    ]),
     characterController.updateCharacter )
 
 router.get('/', auth, characterController.getMyCharacters);

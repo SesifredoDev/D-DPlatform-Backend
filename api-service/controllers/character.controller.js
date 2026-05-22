@@ -45,6 +45,12 @@ function processCharacterUrls(req, character) {
         character.pdfLink = getFileFullUrl(req, storedPdf);
         character.pdfLinkUrl = getFileFullUrl(req, storedPdf);
     }
+    if (character.ddbPdfLink) {
+        const storedDdbPdf = normalizeStoredFileValue(character.ddbPdfLink);
+        character.ddbPdfKey = storedDdbPdf;
+        character.ddbPdfLink = getFileFullUrl(req, storedDdbPdf);
+        character.ddbPdfLinkUrl = getFileFullUrl(req, storedDdbPdf);
+    }
 }
 
 async function notifyCharacterUpdate(req, serverId, character) {
@@ -97,6 +103,7 @@ exports.createCharacter = async (req, res) => {
         const charData = req.body;
         const userId = req.user.id;
         let iconKey = normalizeStoredFileValue(charData.icon);
+        let ddbPdfKey = normalizeStoredFileValue(charData.ddbPdfLink);
         let pdfKey = normalizeStoredFileValue(charData.pdfLink);
 
         if (req.files) {
@@ -105,6 +112,9 @@ exports.createCharacter = async (req, res) => {
             }
             if (req.files.pdf) {
                 pdfKey = await handleFileUpload(req.files.pdf[0]);
+            }
+            if (req.files.ddbPdf) {
+                ddbPdfKey = await handleFileUpload(req.files.ddbPdf[0]);
             }
         }
 
@@ -120,6 +130,7 @@ exports.createCharacter = async (req, res) => {
             icon: iconKey || null,
             ddbId: charData.ddbId || null,
             ddbUsername: charData.ddbUsername || null,
+            ddbPdfLink: ddbPdfKey || null,
             pdfLink: pdfKey || null,
             baseStats: typeof charData.baseStats === 'string'
                 ? JSON.parse(charData.baseStats) : charData.baseStats,
@@ -169,6 +180,9 @@ exports.updateCharacter = async (req, res) => {
         fields.forEach(field => {
             if (charData[field] !== undefined) updateFields[field] = charData[field];
         });
+        if (charData.ddbPdfLink !== undefined) {
+            updateFields.ddbPdfLink = normalizeStoredFileValue(charData.ddbPdfLink) || null;
+        }
 
         if (charData.baseStats) {
             updateFields.baseStats = typeof charData.baseStats === 'string'
@@ -201,6 +215,9 @@ exports.updateCharacter = async (req, res) => {
             }
             if (req.files.pdf) {
                 updateFields.pdfLink = await handleFileUpload(req.files.pdf[0]);
+            }
+            if (req.files.ddbPdf) {
+                updateFields.ddbPdfLink = await handleFileUpload(req.files.ddbPdf[0]);
             }
         }
 
