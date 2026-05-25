@@ -4,11 +4,16 @@ const fs = require('fs-extra');
 const nodeFs = require('fs');
 const path = require('path');
 const os = require('os');
+const { Transform } = require('stream');
+const zlib = require('zlib');
 const { buildFileUrl } = require('../utils/serverHelpers');
 
 const TEMP_DIR = path.join(os.tmpdir(), 'd-dplatform-uploads');
 const SHARP_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB limit for Sharp processing
 const ASTRAL_CONTENT_TYPE = 'application/vnd.ddplatform.astral';
+const ASTRAL_MAGIC = Buffer.from([65, 83, 84, 82, 65, 76, 49, 0]);
+const ASTRAL_MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
+const ASTRAL_ARCHIVE_PATH_MAX_BYTES = 4096;
 
 function isAstralFilename(filename) {
     return String(filename || '').toLowerCase().endsWith('.astral');
@@ -36,6 +41,249 @@ function getContentDisposition(req, filename) {
         : 'inline';
 
     return `${disposition}; filename="${getSafeDispositionFilename(filename)}"`;
+}
+
+function normalizeArchiveRelativePath(value) {
+    const normalized = String(value || '').replace(/\\/g, '/').trim();
+    if (!normalized || normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) {
+        throw new Error('Invalid Astral archive path');
+    }
+
+    const parts = normalized.split('/').filter(Boolean);
+    if (!parts.length || parts.some(part => part === '.' || part === '..')) {
+        throw new Error('Invalid Astral archive path');
+    }
+
+    return parts.join('/');
+}
+
+function guessAstralEntryContentType(relativePath) {
+    const extension = String(relativePath || '').split(/[?#]/)[0].toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? '';
+    if (extension === 'webm') return 'video/webm';
+    if (extension === 'mp4' || extension === 'm4v') return 'video/mp4';
+    if (extension === 'mov') return 'video/quicktime';
+    if (extension === 'ogg' || extension === 'oga') return 'audio/ogg';
+    if (extension === 'opus') return 'audio/ogg; codecs=opus';
+    if (extension === 'mp3') return 'audio/mpeg';
+    if (extension === 'wav') return 'audio/wav';
+    if (extension === 'webp') return 'image/webp';
+    if (extension === 'png') return 'image/png';
+    if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+    if (extension === 'gif') return 'image/gif';
+    if (extension === 'json') return 'application/json';
+    return 'application/octet-stream';
+}
+
+function createAstralMagicStripper() {
+    let header = Buffer.alloc(0);
+    let checked = false;
+
+    return new Transform({
+        transform(chunk, encoding, callback) {
+            if (checked) {
+                callback(null, chunk);
+                return;
+            }
+
+            header = Buffer.concat([header, chunk]);
+            if (header.length < ASTRAL_MAGIC.length) {
+                callback();
+                return;
+            }
+
+            const magic = header.subarray(0, ASTRAL_MAGIC.length);
+            if (!magic.equals(ASTRAL_MAGIC)) {
+                callback(new Error('Invalid .astral recording package'));
+                return;
+            }
+
+            checked = true;
+            callback(null, header.subarray(ASTRAL_MAGIC.length));
+        },
+        flush(callback) {
+            if (!checked) {
+                callback(new Error('Invalid .astral recording package'));
+                return;
+            }
+
+            callback();
+        }
+    });
+}
+
+class AstralArchiveReader {
+    constructor(stream) {
+        this.iterator = stream[Symbol.asyncIterator]();
+        this.buffer = Buffer.alloc(0);
+        this.done = false;
+    }
+
+    async readExact(length) {
+        while (this.buffer.length < length) {
+            if (this.done) {
+                throw new Error('Astral archive ended unexpectedly');
+            }
+
+            const next = await this.iterator.next();
+            if (next.done) {
+                this.done = true;
+                continue;
+            }
+
+            const chunk = Buffer.isBuffer(next.value)
+                ? next.value
+                : Buffer.from(next.value);
+            if (chunk.length) {
+                this.buffer = this.buffer.length
+                    ? Buffer.concat([this.buffer, chunk])
+                    : chunk;
+            }
+        }
+
+        const output = this.buffer.subarray(0, length);
+        this.buffer = this.buffer.subarray(length);
+        return output;
+    }
+
+    async skip(length) {
+        let remaining = length;
+        while (remaining > 0) {
+            const take = Math.min(remaining, Math.max(1, this.buffer.length || 64 * 1024));
+            await this.readExact(take);
+            remaining -= take;
+        }
+    }
+
+    async pipeBytes(response, length) {
+        let remaining = length;
+        while (remaining > 0) {
+            const take = Math.min(remaining, Math.max(1, this.buffer.length || 64 * 1024));
+            const chunk = await this.readExact(take);
+            remaining -= chunk.length;
+
+            if (!response.write(chunk)) {
+                await new Promise(resolve => response.once('drain', resolve));
+            }
+        }
+
+        response.end();
+    }
+
+    async readEntryHeader() {
+        const pathLengthBytes = await this.readExact(4);
+        const pathLength = pathLengthBytes.readUInt32LE(0);
+        if (pathLength === 0) {
+            return null;
+        }
+
+        if (pathLength > ASTRAL_ARCHIVE_PATH_MAX_BYTES) {
+            throw new Error('Astral archive path is too long');
+        }
+
+        const fileSizeBytes = await this.readExact(8);
+        const fileSize = Number(fileSizeBytes.readBigUInt64LE(0));
+        if (!Number.isSafeInteger(fileSize) || fileSize < 0) {
+            throw new Error('Astral archive file is too large');
+        }
+
+        const relativePath = normalizeArchiveRelativePath((await this.readExact(pathLength)).toString('utf8'));
+        return {
+            relativePath,
+            fileSize
+        };
+    }
+}
+
+async function createAstralArchiveReader(key) {
+    const { stream, contentLength } = await s3Service.getObjectStream(key);
+    const magicStripper = createAstralMagicStripper();
+    const gunzip = zlib.createGunzip();
+    const archiveStream = stream.pipe(magicStripper).pipe(gunzip);
+    return {
+        reader: new AstralArchiveReader(archiveStream),
+        sourceStream: stream,
+        archiveStream,
+        contentLength
+    };
+}
+
+function destroyAstralStreams(sourceStream, archiveStream) {
+    sourceStream?.destroy?.();
+    archiveStream?.destroy?.();
+}
+
+async function readAstralManifest(key) {
+    const { reader, sourceStream, archiveStream, contentLength } = await createAstralArchiveReader(key);
+    try {
+        const header = await reader.readEntryHeader();
+        if (!header || header.relativePath !== 'manifest.json') {
+            throw new Error('Astral package is missing manifest.json');
+        }
+
+        if (header.fileSize > ASTRAL_MANIFEST_MAX_BYTES) {
+            throw new Error('Astral manifest is too large');
+        }
+
+        const manifest = JSON.parse((await reader.readExact(header.fileSize)).toString('utf8'));
+        return {
+            manifest,
+            packageSize: contentLength || 0
+        };
+    } finally {
+        destroyAstralStreams(sourceStream, archiveStream);
+    }
+}
+
+function parseRangeHeader(rangeHeader, fileSize) {
+    if (!rangeHeader) {
+        return null;
+    }
+
+    const match = String(rangeHeader).match(/^bytes=(\d*)-(\d*)$/);
+    if (!match) {
+        return { invalid: true };
+    }
+
+    let start;
+    let end;
+    if (match[1] === '') {
+        const suffixLength = Number.parseInt(match[2], 10);
+        if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+            return { invalid: true };
+        }
+
+        start = Math.max(0, fileSize - suffixLength);
+        end = fileSize - 1;
+    } else {
+        start = Number.parseInt(match[1], 10);
+        end = match[2] === '' ? fileSize - 1 : Number.parseInt(match[2], 10);
+    }
+
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= fileSize) {
+        return { invalid: true };
+    }
+
+    return {
+        start,
+        end: Math.min(end, fileSize - 1)
+    };
+}
+
+function buildAstralAttachmentUrl(req, key, routeName) {
+    const fileUrl = buildFileUrl(req, key);
+    if (!fileUrl) return null;
+
+    try {
+        const parsed = new URL(fileUrl);
+        const filesMarker = '/files/';
+        const markerIndex = parsed.pathname.lastIndexOf(filesMarker);
+        const apiPrefix = markerIndex >= 0 ? parsed.pathname.slice(0, markerIndex + filesMarker.length) : '/api/files/';
+        parsed.pathname = `${apiPrefix}${encodeURIComponent(key)}/${routeName}`;
+        parsed.search = '';
+        return parsed.toString();
+    } catch {
+        return null;
+    }
 }
 
 function validateUploadSessionId(fileId) {
@@ -117,6 +365,115 @@ async function uploadSmallImageBufferIfUseful(buffer, filename, contentType) {
 
     return { buffer, contentType };
 }
+
+/**
+ * Fast Astral manifest access:
+ * GET /api/files/:id/astral-manifest
+ */
+exports.getAstralManifest = async (req, res) => {
+    const key = req.params.id;
+
+    try {
+        if (!isAstralFilename(key)) {
+            return res.status(400).json({ message: 'This file is not an .astral recording' });
+        }
+
+        const { manifest, packageSize } = await readAstralManifest(key);
+        const mediaUrl = buildAstralAttachmentUrl(req, key, 'astral-file');
+        const packageUrl = buildFileUrl(req, key);
+        res.json({
+            sessionId: `remote-${String(key).replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 100)}`,
+            sessionDir: `remote:${key}`,
+            packagePath: packageUrl,
+            packageSize,
+            manifest,
+            remoteMediaUrlTemplate: mediaUrl ? `${mediaUrl}?path={path}` : null
+        });
+    } catch (error) {
+        console.error('[FilesController] Failed to read Astral manifest:', error);
+        res.status(422).json({ message: error.message || 'Could not read Astral recording manifest' });
+    }
+};
+
+/**
+ * Streams one file from inside an Astral package:
+ * GET /api/files/:id/astral-file?path=participants/...
+ */
+exports.getAstralFile = async (req, res) => {
+    const key = req.params.id;
+    let targetPath;
+
+    try {
+        if (!isAstralFilename(key)) {
+            return res.status(400).json({ message: 'This file is not an .astral recording' });
+        }
+
+        targetPath = normalizeArchiveRelativePath(req.query?.path);
+    } catch (error) {
+        return res.status(400).json({ message: error.message || 'Invalid Astral file path' });
+    }
+
+    let sourceStream;
+    let archiveStream;
+    try {
+        const archive = await createAstralArchiveReader(key);
+        sourceStream = archive.sourceStream;
+        archiveStream = archive.archiveStream;
+        const reader = archive.reader;
+
+        while (true) {
+            const header = await reader.readEntryHeader();
+            if (!header) {
+                break;
+            }
+
+            if (header.relativePath !== targetPath) {
+                await reader.skip(header.fileSize);
+                continue;
+            }
+
+            const range = parseRangeHeader(req.headers.range, header.fileSize);
+            if (range?.invalid) {
+                res.set('Content-Range', `bytes */${header.fileSize}`);
+                return res.status(416).end();
+            }
+
+            const start = range ? range.start : 0;
+            const end = range ? range.end : Math.max(0, header.fileSize - 1);
+            const contentLength = header.fileSize === 0 ? 0 : end - start + 1;
+            if (start > 0) {
+                await reader.skip(start);
+            }
+
+            res.status(range ? 206 : 200);
+            res.set('Content-Type', guessAstralEntryContentType(targetPath));
+            res.set('Accept-Ranges', 'bytes');
+            res.set('Content-Length', String(contentLength));
+            res.set('Content-Disposition', `inline; filename="${getSafeDispositionFilename(path.basename(targetPath))}"`);
+            if (range) {
+                res.set('Content-Range', `bytes ${start}-${end}/${header.fileSize}`);
+            }
+
+            if (contentLength === 0) {
+                return res.end();
+            }
+
+            await reader.pipeBytes(res, contentLength);
+            return;
+        }
+
+        res.status(404).json({ message: 'File not found in Astral recording' });
+    } catch (error) {
+        console.error('[FilesController] Failed to stream Astral file:', error);
+        if (!res.headersSent) {
+            res.status(422).json({ message: error.message || 'Could not stream Astral recording file' });
+        } else {
+            res.destroy(error);
+        }
+    } finally {
+        destroyAstralStreams(sourceStream, archiveStream);
+    }
+};
 
 /**
  * Proxy S3 file through API:

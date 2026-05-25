@@ -3,6 +3,8 @@ const router = express.Router();
 const fileController = require('../controllers/files.controller');
 const upload = require('../middleware/upload.middleware');
 
+router.get("/:id/astral-manifest", fileController.getAstralManifest);
+router.get("/:id/astral-file", fileController.getAstralFile);
 router.get("/:id", fileController.getFile);
 router.post("/upload", upload.single('file'), fileController.uploadFile);
 
