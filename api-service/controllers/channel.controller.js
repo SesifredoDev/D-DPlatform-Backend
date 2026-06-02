@@ -88,7 +88,17 @@ async function checkChannelPermission(server, member, channel, permissionName) {
     return memberRoles.some(role => role.permissions?.[permissionName] === true);
 }
 
+async function canJoinCallChannel(server, member, channel) {
+    if (!server || !member || !channel || channel.type !== "call") return false;
+
+    const canViewChannel = await checkChannelPermission(server, member, channel, "READ_MESSAGE_HISTORY");
+    if (!canViewChannel) return false;
+
+    return checkChannelPermission(server, member, channel, "CONNECT");
+}
+
 exports.checkChannelPermission = checkChannelPermission;
+exports.canJoinCallChannel = canJoinCallChannel;
 exports.normalizePermissionOverwrites = normalizePermissionOverwrites;
 
 /**
@@ -256,7 +266,7 @@ exports.getVideoRoomMetadata = async (req, res) => {
         if (!server) return res.status(404).json({ message: "Server not found" });
 
         const member = server.members.find(m => resolveId(m.user) === req.user.id);
-        if (!member || !(await checkChannelPermission(server, member, channel, "CONNECT"))) {
+        if (!member || !(await canJoinCallChannel(server, member, channel))) {
             return res.status(403).json({ message: "Permission denied" });
         }
 

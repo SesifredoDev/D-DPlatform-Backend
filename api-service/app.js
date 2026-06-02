@@ -1,8 +1,6 @@
 ﻿const express = require('express');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
-const { AccessToken } = require('livekit-server-sdk');
-const axios = require('axios');
 
 const authRoutes = require('./routes/auth.routes');
 const auth = require('./middleware/auth.middleware');
@@ -13,9 +11,7 @@ const characterRoutes = require('./routes/character.routes');
 const serverRoutes = require('./routes/server.routes');
 const messageRoutes = require('./routes/message.routes');
 const spotifyRoutes = require('./routes/spotify.routes');
-const Channel = require('./models/Channel');
-const Server = require('./models/Server');
-const { checkChannelPermission } = require('./controllers/channel.controller');
+const { createLiveKitConnectionInfo } = require('./services/livekit.service');
 
 const app = express();
 app.set('trust proxy', true);
@@ -95,80 +91,24 @@ app.use('/message', messageRoutes);
 app.use('/character', characterRoutes);
 app.use('/spotify', spotifyRoutes);
 
-app.get('/livekit/token', auth, async (req, res) => {
+async function handleLiveKitTokenRequest(req, res) {
     try {
-        const { room, identity } = req.query;
-        if (!room || !identity) {
-            return res.status(400).send({ error: 'room and identity are required' });
-        }
-
-        if (!String(identity).startsWith(`${req.user.id}:`) && String(identity) !== req.user.id) {
-            return res.status(403).send({ error: 'Invalid call identity' });
-        }
-
-        const channel = await Channel.findById(room);
-        if (!channel || channel.type !== 'call') {
-            return res.status(404).send({ error: 'Call channel not found' });
-        }
-
-        const server = await Server.findById(channel.server);
-        if (!server) {
-            return res.status(404).send({ error: 'Server not found' });
-        }
-
-        const member = (server.members || []).find(m => m.user.toString() === req.user.id);
-        if (!member || !(await checkChannelPermission(server, member, channel, 'CONNECT'))) {
-            return res.status(403).send({ error: 'You do not have permission to join this call' });
-        }
-
-        const apiKey = process.env.LIVEKIT_API_KEY || 'devkey';
-        const apiSecret = process.env.LIVEKIT_API_SECRET || 'superlongsecuresecretkeyatleast32chars!!';
-
-        const at = new AccessToken(apiKey, apiSecret, {
-            identity: identity,
-        });
-        
-        at.addGrant({ 
-            roomJoin: true, 
-            room: room, 
-            canPublish: true, 
-            canSubscribe: true,
-            canUpdateOwnMetadata: true 
-        });
-        
-        const token = await at.toJwt();
-
-        let iceServers = [];
-        try {
-            const meteredApiKey = process.env.METERED_SECRET_KEY || '1186d9c786f96006023c36e08c6e19cb5886';
-            const response = await axios.get(`https://dissertation.metered.live/api/v1/turn/credentials?apiKey=${meteredApiKey}`);
-            iceServers = response.data;
-        } catch (meteredError) {
-            console.error('Failed to fetch Metered credentials, using fallbacks:', meteredError.message);
-            iceServers = [
-                { urls: 'stun:stun.relay.metered.ca:80' },
-                {
-                    urls: [
-                        'turn:global.relay.metered.ca:80',
-                        'turn:global.relay.metered.ca:80?transport=tcp',
-                        'turn:global.relay.metered.ca:443',
-                        'turns:global.relay.metered.ca:443?transport=tcp'
-                    ],
-                    username: process.env.METERED_USERNAME,
-                    credential: process.env.METERED_CREDENTIAL
-                }
-            ];
-        }
-
-        res.send({ 
-            token: token,
-            iceServers: iceServers
-        });
+        const requestPayload = req.method === 'GET' ? req.query : req.body;
+        const connectionInfo = await createLiveKitConnectionInfo(requestPayload, req.user.id);
+        res.send(connectionInfo);
     } catch (error) {
-        console.error('Error generating token:', error);
-        res.status(500).send({ error: 'Failed to generate token' });
+        const statusCode = error.statusCode || 500;
+        if (statusCode >= 500) {
+            console.error('Error generating token:', error);
+        }
+        res.status(statusCode).send({
+            error: statusCode >= 500 ? 'Failed to generate token' : error.message
+        });
     }
-});
+}
+
+app.post('/livekit/token', auth, handleLiveKitTokenRequest);
+app.get('/livekit/token', auth, handleLiveKitTokenRequest);
 
 module.exports = app;
 

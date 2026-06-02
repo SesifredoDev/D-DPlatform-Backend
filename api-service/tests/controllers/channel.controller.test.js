@@ -1,7 +1,7 @@
 const channelController = require('../../controllers/channel.controller');
 const Server = require('../../models/Server');
 const Channel = require('../../models/Channel');
-const { hasPermission } = require('../../utils/permissions');
+const { hasPermission, getMemberRoleIds, getMemberRoles } = require('../../utils/permissions');
 
 jest.mock('../../models/Server');
 jest.mock('../../models/Channel');
@@ -86,6 +86,27 @@ describe('Channel Controller', () => {
             await channelController.deleteChannel(req, res);
 
             expect(res.status).toHaveBeenCalledWith(404);
+        });
+    });
+
+    describe('canJoinCallChannel', () => {
+        it('requires both view and connect permissions for call channels', async () => {
+            const server = { owner: 'owner123' };
+            const member = { user: 'user123', roles: ['role123'] };
+            const channel = { type: 'call', permissionOverwrites: [] };
+
+            getMemberRoleIds.mockReturnValue(['role123']);
+            getMemberRoles.mockResolvedValue([
+                { _id: 'role123', permissions: { READ_MESSAGE_HISTORY: true, CONNECT: false } }
+            ]);
+
+            await expect(channelController.canJoinCallChannel(server, member, channel)).resolves.toBe(false);
+
+            getMemberRoles.mockResolvedValue([
+                { _id: 'role123', permissions: { READ_MESSAGE_HISTORY: true, CONNECT: true } }
+            ]);
+
+            await expect(channelController.canJoinCallChannel(server, member, channel)).resolves.toBe(true);
         });
     });
 });
