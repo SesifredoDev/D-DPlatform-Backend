@@ -1,0 +1,38 @@
+
+> d-d-platform@0.0.0 build
+> ng build
+
+[33m>[39m Building...
+[32m√[39m Building...
+[1mInitial chunk files[22m  [2m | [22m[1mNames[22m        [2m | [22m [1mRaw size[22m[2m | [22m[1mEstimated transfer size[22m
+[32mmain-HV3BXGZD.js[39m     [2m | [22m[2mmain[22m         [2m | [22m  [36m4.57 MB[39m[2m | [22m              [36m955.81 kB[39m
+[32mchunk-EUTCGGFP.js[39m    [2m | [22m[2m-[22m            [2m | [22m[36m314.66 kB[39m[2m | [22m               [36m88.76 kB[39m
+[32mstyles-SX327BVO.css[39m  [2m | [22m[2mstyles[22m       [2m | [22m [36m97.66 kB[39m[2m | [22m               [36m12.88 kB[39m
+[32mpolyfills-6ISPNSXF.js[39m[2m | [22m[2mpolyfills[22m    [2m | [22m [36m35.68 kB[39m[2m | [22m               [36m11.57 kB[39m
+[32mchunk-WIKZ3PMN.js[39m    [2m | [22m[2m-[22m            [2m | [22m [36m35.41 kB[39m[2m | [22m               [36m11.38 kB[39m
+[32mchunk-XYUF6GX4.js[39m    [2m | [22m[2m-[22m            [2m | [22m  [36m2.12 kB[39m[2m | [22m              [36m905 bytes[39m
+
+[1m [22m                    [2m | [22m[1mInitial total[22m[2m | [22m  [1m5.05 MB[22m[2m | [22m                [1m1.08 MB[22m
+
+[1mLazy chunk files[22m     [2m | [22m[1mNames[22m        [2m | [22m [1mRaw size[22m[2m | [22m[1mEstimated transfer size[22m
+[32mchunk-EWIQX4IK.js[39m    [2m | [22m[2mindex[22m        [2m | [22m[36m100.60 kB[39m[2m | [22m               [36m26.09 kB[39m
+[32mchunk-H3XFVJTF.js[39m    [2m | [22m[2mindex[22m        [2m | [22m [36m97.93 kB[39m[2m | [22m               [36m22.54 kB[39m
+[32mchunk-NVH6NPFC.js[39m    [2m | [22m[2m-[22m            [2m | [22m [36m86.81 kB[39m[2m | [22m               [36m28.26 kB[39m
+[32mchunk-7BSH2EKU.js[39m    [2m | [22m[2mindex[22m        [2m | [22m [36m70.85 kB[39m[2m | [22m               [36m20.70 kB[39m
+[32mchunk-7RRKDO6Y.js[39m    [2m | [22m[2mindex[22m        [2m | [22m [36m45.16 kB[39m[2m | [22m               [36m15.57 kB[39m
+[32mchunk-L2IJXGL3.js[39m    [2m | [22m[2mindex[22m        [2m | [22m [36m44.21 kB[39m[2m | [22m               [36m14.12 kB[39m
+[32mchunk-PLO4W4SJ.js[39m    [2m | [22m[2mindex[22m        [2m | [22m [36m40.77 kB[39m[2m | [22m               [36m13.70 kB[39m
+[32mchunk-7GNMW3RE.js[39m    [2m | [22m[2msql[22m          [2m | [22m [36m37.09 kB[39m[2m | [22m                [36m9.60 kB[39m
+[32mchunk-YZFUJTZ6.js[39m    [2m | [22m[2mindex[22m        [2m | [22m [36m32.39 kB[39m[2m | [22m               [36m11.33 kB[39m
+[32mchunk-KP6P2ACQ.js[39m    [2m | [22m[2mindex[22m        [2m | [22m [36m30.85 kB[39m[2m | [22m               [36m10.96 kB[39m
+[32mchunk-PVBVS22V.js[39m    [2m | [22m[2m-[22m            [2m | [22m [36m28.59 kB[39m[2m | [22m               [36m10.15 kB[39m
+[32mchunk-VL7VQOGR.js[39m    [2m | [22m[2mcss[22m          [2m | [22m [36m27.17 kB[39m[2m | [22m                [36m7.57 kB[39m
+[32mchunk-QE45EYAK.js[39m    [2m | [22m[2m-[22m            [2m | [22m [36m27.14 kB[39m[2m | [22m               [36m10.46 kB[39m
+[32mchunk-MJKUVG74.js[39m    [2m | [22m[2m-[22m            [2m | [22m [36m26.55 kB[39m[2m | [22m                [36m8.08 kB[39m
+[32mchunk-6BSIR76R.js[39m    [2m | [22m[2mstylus[22m       [2m | [22m [36m25.83 kB[39m[2m | [22m                [36m7.71 kB[39m
+[2m...and 117 more lazy chunks files. Use "--verbose" to show all the files.[22m
+
+Application bundle generation complete. [33.385 seconds] - 2026-05-24T17:16:28.997Z
+
+Output location: C:\Users\Paolo\dev\D-DPlatform\dist\d-d-platform
+

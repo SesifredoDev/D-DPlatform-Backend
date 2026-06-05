@@ -18,9 +18,11 @@ const SOUNDCLOUD_PUBLIC_CLIENT_IDS = Array.from(new Set([
   process.env.SOUNDCLOUD_CLIENT_ID,
 ].filter(Boolean)));
 const SOUNDCLOUD_APP_VERSION = process.env.SOUNDCLOUD_APP_VERSION || '1778162840';
+const SOUNDCLOUD_STREAM_CACHE_TTL_MS = 4 * 60 * 1000;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:4200';
 
 const SOUNDCLOUD_AUTH_COOKIE = 'soundcloud_oauth_state';
+const soundCloudStreamCache = new Map();
 const SPOTIFY_SCOPE = [
   'user-read-playback-state',
   'user-modify-playback-state',
@@ -115,8 +117,12 @@ function normalizeSoundCloudUrl(value) {
     }
 
     url.protocol = 'https:';
+    const secretToken = url.searchParams.get('secret_token');
     url.hash = '';
     url.search = '';
+    if (secretToken) {
+      url.searchParams.set('secret_token', secretToken);
+    }
     return url.toString().replace(/\/$/, '');
   } catch (error) {
     return null;
@@ -178,6 +184,36 @@ function normalizeSoundCloudPlaylist(playlist) {
   };
 }
 
+function normalizeSoundCloudTrack(track) {
+  const uri = normalizeSoundCloudUrl(track?.permalink_url || track?.url);
+  if (!uri) return null;
+
+  const owner = track?.user?.username || track?.artist || track?.publisher || '';
+  const ownerId = track?.user?.id ?? track?.user_id ?? track?.ownerId;
+  const image = normalizeSoundCloudImage(
+    track?.artwork_url
+    || track?.image
+    || track?.user?.avatar_url
+  ) || 'assets/spotify-placeholder.png';
+
+  return {
+    id: String(track?.id ?? uri),
+    name: track?.title || track?.name || 'SoundCloud track',
+    uri,
+    type: 'track',
+    image,
+    artist: owner,
+    artistId: ownerId ? String(ownerId) : undefined,
+    owner,
+    ownerId: ownerId ? String(ownerId) : undefined,
+    publisher: owner,
+    album: { images: [{ url: image }] },
+    artists: owner ? [{ id: ownerId ? String(ownerId) : undefined, name: owner }] : [],
+    images: [{ url: image }],
+    duration: track?.duration,
+  };
+}
+
 function asSoundCloudCollection(responseData) {
   if (Array.isArray(responseData)) return responseData;
   if (Array.isArray(responseData?.collection)) return responseData.collection;
@@ -230,6 +266,66 @@ async function getSoundCloudPaginatedCollection(pathOrUrl, params = {}) {
   }
 
   return collection;
+}
+
+function getPlayableSoundCloudTrack(resource) {
+  if (!resource) return null;
+  if (resource.kind === 'track' && Array.isArray(resource.media?.transcodings)) {
+    return resource;
+  }
+
+  return null;
+}
+
+function selectSoundCloudTranscoding(track) {
+  const transcodings = Array.isArray(track?.media?.transcodings)
+    ? track.media.transcodings
+    : [];
+
+  return transcodings.find(transcoding =>
+    transcoding?.format?.protocol === 'progressive'
+    && /mpeg|mp3|audio/i.test(String(transcoding?.format?.mime_type || ''))
+  ) || transcodings.find(transcoding => transcoding?.format?.protocol === 'progressive') || null;
+}
+
+async function resolveSoundCloudAudioStream(sourceUrl) {
+  const normalizedUrl = normalizeSoundCloudUrl(sourceUrl);
+  if (!normalizedUrl) {
+    throw new Error('Missing or invalid SoundCloud URL');
+  }
+
+  const cached = soundCloudStreamCache.get(normalizedUrl);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  const resource = await getSoundCloudApi('resolve', { url: normalizedUrl });
+  const track = getPlayableSoundCloudTrack(resource);
+  if (!track) {
+    throw new Error('SoundCloud URL did not resolve to a playable track');
+  }
+
+  const transcoding = selectSoundCloudTranscoding(track);
+  if (!transcoding?.url) {
+    throw new Error('SoundCloud track has no progressive audio transcoding');
+  }
+
+  const streamInfo = await getSoundCloudApi(transcoding.url);
+  if (!streamInfo?.url) {
+    throw new Error('SoundCloud did not return a playable audio URL');
+  }
+
+  const value = {
+    sourceUrl: normalizedUrl,
+    mediaUrl: streamInfo.url,
+    mimeType: transcoding.format?.mime_type || 'audio/mpeg',
+    track: normalizeSoundCloudTrack(track),
+  };
+  soundCloudStreamCache.set(normalizedUrl, {
+    value,
+    expiresAt: Date.now() + SOUNDCLOUD_STREAM_CACHE_TTL_MS,
+  });
+  return value;
 }
 
 function getSoundCloudUserId(user) {
@@ -314,6 +410,72 @@ router.get('/soundcloud/user-playlists', async (req, res) => {
     console.error('SoundCloud user playlist import error:', error.response?.data || error.message);
     res.status(error.response?.status || 500).json({
       message: 'Could not fetch SoundCloud user playlists',
+    });
+  }
+});
+
+router.get('/soundcloud/stream-info', async (req, res) => {
+  const sourceUrl = normalizeSoundCloudUrl(req.query.url);
+  if (!sourceUrl) {
+    return res.status(400).json({ message: 'Missing or invalid SoundCloud track URL' });
+  }
+
+  try {
+    const stream = await resolveSoundCloudAudioStream(sourceUrl);
+    res.json({
+      sourceUrl: stream.sourceUrl,
+      mimeType: stream.mimeType,
+      track: stream.track,
+    });
+  } catch (error) {
+    console.error('SoundCloud stream info error:', error.response?.data || error.message);
+    res.status(error.response?.status || 502).json({
+      message: 'Could not resolve SoundCloud audio for streaming',
+      details: error.message,
+    });
+  }
+});
+
+router.get('/soundcloud/audio', async (req, res) => {
+  const sourceUrl = normalizeSoundCloudUrl(req.query.url);
+  if (!sourceUrl) {
+    return res.status(400).json({ message: 'Missing or invalid SoundCloud track URL' });
+  }
+
+  try {
+    const stream = await resolveSoundCloudAudioStream(sourceUrl);
+    const upstream = await axios.get(stream.mediaUrl, {
+      responseType: 'stream',
+      headers: {
+        accept: 'audio/*,*/*',
+        ...(req.headers.range ? { range: req.headers.range } : {}),
+      },
+      validateStatus: status => status === 200 || status === 206,
+    });
+
+    res.status(upstream.status);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', upstream.headers['content-type'] || stream.mimeType || 'audio/mpeg');
+    ['content-length', 'content-range', 'accept-ranges'].forEach(header => {
+      if (upstream.headers[header]) {
+        res.setHeader(header, upstream.headers[header]);
+      }
+    });
+
+    upstream.data.on('error', error => {
+      console.error('SoundCloud audio proxy stream error:', error.message);
+      if (!res.headersSent) {
+        res.status(502).end();
+      } else {
+        res.end();
+      }
+    });
+    upstream.data.pipe(res);
+  } catch (error) {
+    console.error('SoundCloud audio proxy error:', error.response?.data || error.message);
+    res.status(error.response?.status || 502).json({
+      message: 'Could not stream SoundCloud audio',
+      details: error.message,
     });
   }
 });

@@ -67,7 +67,7 @@ app.use(
             'Cache-Control', 
             'Range'
         ],
-        exposedHeaders: ['Content-Range', 'X-Content-Range', 'Content-Length', 'Content-Disposition'],
+        exposedHeaders: ['Content-Range', 'X-Content-Range', 'Content-Length', 'Content-Disposition', 'Accept-Ranges'],
     })
 );
 
