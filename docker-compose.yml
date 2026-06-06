@@ -10,6 +10,7 @@ services:
       - NODE_ENV=${NODE_ENV}
     depends_on:
       - redis
+      - mongo
     networks:
       - d-platform-network
 
@@ -74,7 +75,19 @@ services:
     networks:
       - d-platform-network
 
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - d-platform-network
+
 networks:
   d-platform-network:
     driver: bridge
 
+volumes:
+  mongo-data:
