@@ -1,0 +1,45 @@
+name: Frontend Android Build
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-android.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-android.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    if: hashFiles('frontend/android/gradlew') != ''
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: ./frontend/android
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build Android app
+        run: ./gradlew assembleDebug
+
