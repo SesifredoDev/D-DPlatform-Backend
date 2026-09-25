@@ -142,7 +142,6 @@ const EPHEMERAL_ACTIONS = new Set(['measure-sync', 'ping', 'pointer-sync']);
 const PLAYER_TOKEN_ACTIONS = new Set(['token-move', 'token-update', 'token-deleted']);
 const PLAYER_TURN_ACTIONS = new Set(['turn-order-add', 'turn-order-remove']);
 const FX_ACTIONS = new Set(['fx-added', 'fx-deleted', 'fx-cleared']);
-const SERVER_AUTHORED_ACTIONS = new Set([...FX_ACTIONS]);
 
 const findToken = (tokens, tokenId) => {
     if (!Array.isArray(tokens)) return null;
@@ -253,6 +252,7 @@ async function start(client = redisClient) {
             }
 
             await client.set(`room:${roomId}:host`, socket.id, { EX: 86400 });
+            io.to(roomId).emit('host-changed', { hostId: socket.id });
 
             const existingStateRaw = await client.get(`room:${roomId}`);
             let existingVersion = 0;
@@ -283,7 +283,6 @@ async function start(client = redisClient) {
                 socket.emit('map-update', state);
             }
 
-            io.to(roomId).emit('host-changed', { hostId: socket.id });
         });
 
         socket.on('session-status', async ({ roomId }, ack) => {
@@ -331,11 +330,10 @@ async function start(client = redisClient) {
             if (stateRaw) {
                 try {
                     let state = normalizeRoomState(JSON.parse(stateRaw));
-                    socket.join(roomId);
-                    socket.emit('map-update', state);
-
                     const currentHost = await client.get(`room:${roomId}:host`);
+                    socket.join(roomId);
                     socket.emit('host-changed', { hostId: currentHost });
+                    socket.emit('map-update', state);
                 } catch (e) {
                     socket.emit('error', 'Room state is corrupted.');
                 }
@@ -382,12 +380,12 @@ async function start(client = redisClient) {
                 if (typeof ack === 'function') ack(payload);
             };
 
-            if (EPHEMERAL_ACTIONS.has(action)) {
-                if (!roomId) {
-                    respond({ ok: false, reason: 'room-required' });
-                    return;
-                }
+            if (!roomId) {
+                respond({ ok: false, reason: 'room-required' });
+                return;
+            }
 
+            if (EPHEMERAL_ACTIONS.has(action)) {
                 socket.to(roomId).emit('remote-action', {
                     action,
                     data,
@@ -431,7 +429,7 @@ async function start(client = redisClient) {
                     return;
                 }
 
-                if (currentHostId !== socket.id && !SERVER_AUTHORED_ACTIONS.has(action)) {
+                if (currentHostId !== socket.id) {
                     const hostSocket = io.sockets.sockets.get(currentHostId);
                     if (!hostSocket) {
                         await client.del(`room:${roomId}:host`);
