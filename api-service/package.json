@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "test": "jest",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "migrate:file-keys": "node scripts/migrate-file-keys.js",
+    "migrate:file-keys:apply": "node scripts/migrate-file-keys.js --apply"
   },
   "repository": {
     "type": "git",

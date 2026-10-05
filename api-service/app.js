@@ -11,6 +11,7 @@ const characterRoutes = require('./routes/character.routes');
 const serverRoutes = require('./routes/server.routes');
 const messageRoutes = require('./routes/message.routes');
 const spotifyRoutes = require('./routes/spotify.routes');
+const musicRoutes = require('./routes/music.routes');
 const { createLiveKitConnectionInfo } = require('./services/livekit.service');
 
 const app = express();
@@ -21,6 +22,28 @@ const defaultAllowedOrigins = [
     'https://dissertation.pchaffey.me',
     'http://localhost:4200',
     'http://localhost:4201',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:3002',
+    'http://localhost:3003',
+    'http://localhost:3004',
+    'http://localhost:3005',
+    'http://localhost:3006',
+    'http://localhost:3007',
+    'http://localhost:3008',
+    'http://localhost:3009',
+    'http://localhost:3010',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:3002',
+    'http://127.0.0.1:3003',
+    'http://127.0.0.1:3004',
+    'http://127.0.0.1:3005',
+    'http://127.0.0.1:3006',
+    'http://127.0.0.1:3007',
+    'http://127.0.0.1:3008',
+    'http://127.0.0.1:3009',
+    'http://127.0.0.1:3010',
     'http://127.0.0.1:4201',
     'https://astralproject.localhost',
     'astralproject://localhost',
@@ -41,13 +64,30 @@ const allowedOrigins = Array.from(new Set([
     ...configuredAllowedOrigins
 ]));
 
+function isAllowedDevOrigin(origin) {
+    if (process.env.NODE_ENV === 'production') {
+        return false;
+    }
+
+    try {
+        const parsed = new URL(origin);
+        return ['localhost', '127.0.0.1'].includes(parsed.hostname);
+    } catch (_error) {
+        return false;
+    }
+}
+
 app.use(
     cors({
         origin: function(origin, callback) {
             // Allow requests with no origin (like mobile apps or curl)
             if (!origin) return callback(null, true);
             const normalizedOrigin = origin.replace(/\/+$/, '');
-            if (allowedOrigins.includes(normalizedOrigin) || allowedOrigins.includes('*')) {
+            if (
+                allowedOrigins.includes(normalizedOrigin)
+                || allowedOrigins.includes('*')
+                || isAllowedDevOrigin(normalizedOrigin)
+            ) {
                 return callback(null, true);
             }
             var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
@@ -91,6 +131,7 @@ app.use('/server', serverRoutes);
 app.use('/message', messageRoutes);
 app.use('/character', characterRoutes);
 app.use('/spotify', spotifyRoutes);
+app.use('/music', musicRoutes);
 
 async function handleLiveKitTokenRequest(req, res) {
     try {
