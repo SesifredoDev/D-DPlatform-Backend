@@ -37,10 +37,37 @@ const configuredAllowedOrigins = [
     .map((origin) => origin.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 
+function normalizeOrigin(origin) {
+    if (!origin || typeof origin !== 'string') {
+        return null;
+    }
+
+    try {
+        return new URL(origin).origin;
+    } catch (_error) {
+        return origin.trim().replace(/\/+$/, '');
+    }
+}
+
 const allowedOrigins = Array.from(new Set([
     ...defaultAllowedOrigins,
     ...configuredAllowedOrigins
-]));
+]
+    .map((origin) => normalizeOrigin(origin))
+    .filter(Boolean)));
+
+function isAllowedVercelPreviewOrigin(normalizedOrigin) {
+    if (!normalizedOrigin) {
+        return false;
+    }
+
+    try {
+        const { protocol, hostname } = new URL(normalizedOrigin);
+        return protocol === 'https:' && /^astralprojects-music-system-[a-z0-9-]+\.vercel\.app$/i.test(hostname);
+    } catch (_error) {
+        return false;
+    }
+}
 
 function isAllowedDevOrigin(origin) {
     if (process.env.NODE_ENV === 'production') {
@@ -60,17 +87,17 @@ app.use(
         origin: function(origin, callback) {
             // Allow requests with no origin (like mobile apps or curl)
             if (!origin) return callback(null, true);
-            const normalizedOrigin = origin.replace(/\/+$/, '');
+            const normalizedOrigin = normalizeOrigin(origin);
             if (
                 allowedOrigins.includes(normalizedOrigin)
                 || allowedOrigins.includes('*')
                 || isAllowedDevOrigin(normalizedOrigin)
+                || isAllowedVercelPreviewOrigin(normalizedOrigin)
             ) {
                 return callback(null, true);
             }
-            var msg = 'The CORS policy for this site does not allow access from the specified Origin.';
             console.warn(`Blocked CORS request from origin: ${normalizedOrigin}`);
-            return callback(new Error(msg), false);
+            return callback(null, false);
         },
         credentials: true,
         methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
