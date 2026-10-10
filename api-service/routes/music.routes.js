@@ -5,6 +5,7 @@ const MoodTag = require('../models/MoodTag');
 const AtmosphereTag = require('../models/AtmosphereTag');
 const Song = require('../models/Song');
 const { buildFileUrl } = require('../utils/serverHelpers');
+const auth = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
@@ -67,7 +68,7 @@ router.get('/moods', async (_req, res) => {
     }
 });
 
-router.post('/moods', async (req, res) => {
+router.post('/moods', auth, async (req, res) => {
     const payload = normalizeTagPayload(req.body || {});
     if (!isNonEmptyString(payload.name) || !isNonEmptyString(payload.description) || !isNonEmptyString(payload.cover)) {
         return res.status(400).json({ message: 'name, description, and cover are required' });
@@ -95,7 +96,7 @@ router.get('/atmospheres', async (_req, res) => {
     }
 });
 
-router.post('/atmospheres', async (req, res) => {
+router.post('/atmospheres', auth, async (req, res) => {
     const payload = normalizeTagPayload(req.body || {});
     if (!isNonEmptyString(payload.name) || !isNonEmptyString(payload.description) || !isNonEmptyString(payload.cover)) {
         return res.status(400).json({ message: 'name, description, and cover are required' });
@@ -127,7 +128,7 @@ router.get('/songs', async (_req, res) => {
     }
 });
 
-router.post('/songs', async (req, res) => {
+router.post('/songs', auth, async (req, res) => {
     const cover = normalizeStoredFileKey(req.body?.cover);
     const fileName = String(req.body?.fileName || '').trim();
     const audioUrl = normalizeStoredFileKey(req.body?.audioUrl);
@@ -205,7 +206,7 @@ router.get('/stream/:fileName', async (req, res) => {
     }
 });
 
-router.delete('/songs/:id', async (req, res) => {
+router.delete('/songs/:id', auth, async (req, res) => {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({ message: 'Invalid song id' });
@@ -224,7 +225,7 @@ router.delete('/songs/:id', async (req, res) => {
     }
 });
 
-router.delete('/moods/:id', async (req, res) => {
+router.delete('/moods/:id', auth, async (req, res) => {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({ message: 'Invalid mood id' });
@@ -248,7 +249,7 @@ router.delete('/moods/:id', async (req, res) => {
     }
 });
 
-router.delete('/atmospheres/:id', async (req, res) => {
+router.delete('/atmospheres/:id', auth, async (req, res) => {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
         return res.status(400).json({ message: 'Invalid atmosphere id' });
