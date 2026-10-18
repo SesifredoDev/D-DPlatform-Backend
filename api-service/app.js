@@ -21,13 +21,11 @@ const defaultAllowedOrigins = [
     'https://d-d-platform.vercel.app',
     'https://dissertation.pchaffey.me',
     'http://localhost:4200',
-    'http://localhost:3000',
+    'http://localhost:4201',
+    'http://127.0.0.1:4201',
     'https://astralproject.localhost',
     'astralproject://localhost',
-    'https://tauri.localhost',
-    'tauri://localhost',
-    'http://100.69.189.80:4200',
-    'https://astralprojects-music-system.vercel.app'
+    'http://100.69.189.80:4200'
 ];
 
 const configuredAllowedOrigins = [
@@ -39,50 +37,10 @@ const configuredAllowedOrigins = [
     .map((origin) => origin.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 
-function normalizeOrigin(origin) {
-    if (!origin || typeof origin !== 'string') {
-        return null;
-    }
-
-    try {
-        return new URL(origin).origin;
-    } catch (_error) {
-        return origin.trim().replace(/\/+$/, '');
-    }
-}
-
 const allowedOrigins = Array.from(new Set([
     ...defaultAllowedOrigins,
     ...configuredAllowedOrigins
-]
-    .map((origin) => normalizeOrigin(origin))
-    .filter(Boolean)));
-
-function isAllowedVercelPreviewOrigin(normalizedOrigin) {
-    if (!normalizedOrigin) {
-        return false;
-    }
-
-    try {
-        const { protocol, hostname } = new URL(normalizedOrigin);
-        return protocol === 'https:' && /^astralprojects-music-system-[a-z0-9-]+\.vercel\.app$/i.test(hostname);
-    } catch (_error) {
-        return false;
-    }
-}
-
-function isAllowedDevOrigin(origin) {
-    if (process.env.NODE_ENV === 'production') {
-        return false;
-    }
-
-    try {
-        const parsed = new URL(origin);
-        return ['localhost', '127.0.0.1'].includes(parsed.hostname);
-    } catch (_error) {
-        return false;
-    }
-}
+]));
 
 app.use(
     cors({
