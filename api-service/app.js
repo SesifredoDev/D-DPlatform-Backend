@@ -24,6 +24,8 @@ const defaultAllowedOrigins = [
     'http://localhost:3000',
     'https://astralproject.localhost',
     'astralproject://localhost',
+    'https://tauri.localhost',
+    'tauri://localhost',
     'http://100.69.189.80:4200',
     'https://astralprojects-music-system.vercel.app'
 ];
