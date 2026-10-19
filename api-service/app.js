@@ -17,6 +17,18 @@ const { createLiveKitConnectionInfo } = require('./services/livekit.service');
 const app = express();
 app.set('trust proxy', true);
 
+function normalizeOrigin(origin) {
+    return origin.trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function isAllowedDevOrigin(origin) {
+    return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+}
+
+function isAllowedVercelPreviewOrigin(origin) {
+    return /^https:\/\/astralprojects-music-system(-[a-z0-9-]+)?\.vercel\.app$/.test(origin);
+}
+
 const defaultAllowedOrigins = [
     'https://d-d-platform.vercel.app',
     'https://dissertation.pchaffey.me',
