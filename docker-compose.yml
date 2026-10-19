@@ -4,6 +4,16 @@ services:
     env_file: .env.${NODE_ENV}
     init: true
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - require('http').get('http://127.0.0.1:3000/health',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
     ports:
       - "5000:3000"
     environment:
@@ -62,10 +72,14 @@ services:
     networks:
       - d-platform-network
     depends_on:
-      - api-service
-      - messaging-service
-      - map-service
-      - livekit
+      api-service:
+        condition: service_healthy
+      messaging-service:
+        condition: service_started
+      map-service:
+        condition: service_started
+      livekit:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
