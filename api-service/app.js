@@ -46,11 +46,11 @@ const configuredAllowedOrigins = [
 ]
     .filter(Boolean)
     .flatMap((value) => value.split(','))
-    .map((origin) => origin.trim().replace(/\/+$/, ''))
+    .map((origin) => normalizeOrigin(origin))
     .filter(Boolean);
 
 const allowedOrigins = Array.from(new Set([
-    ...defaultAllowedOrigins,
+    ...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)),
     ...configuredAllowedOrigins
 ]));
 
