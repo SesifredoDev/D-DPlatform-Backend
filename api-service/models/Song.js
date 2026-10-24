@@ -23,6 +23,11 @@ const songSchema = new mongoose.Schema(
             trim: true,
             default: ''
         },
+        durationSeconds: {
+            type: Number,
+            min: 0,
+            default: 0
+        },
         moods: [
             {
                 type: mongoose.Schema.Types.ObjectId,

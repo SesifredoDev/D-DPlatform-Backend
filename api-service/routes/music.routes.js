@@ -13,6 +13,14 @@ function isNonEmptyString(value) {
     return typeof value === 'string' && value.trim().length > 0;
 }
 
+function normalizeNonNegativeNumber(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue) || numericValue < 0) {
+        return null;
+    }
+    return numericValue;
+}
+
 function normalizeTagPayload(payload) {
     return {
         name: String(payload.name || '').trim(),
@@ -133,11 +141,15 @@ router.post('/songs', auth, async (req, res) => {
     const fileName = String(req.body?.fileName || '').trim();
     const audioUrl = normalizeStoredFileKey(req.body?.audioUrl);
     const attribution = String(req.body?.attribution || '').trim();
+    const durationSeconds = normalizeNonNegativeNumber(req.body?.durationSeconds);
     const moodIds = toObjectIdList(req.body?.moods);
     const atmosphereIds = toObjectIdList(req.body?.atmosphere);
 
     if (!isNonEmptyString(fileName) || !isNonEmptyString(audioUrl)) {
         return res.status(400).json({ message: 'fileName and audioUrl are required' });
+    }
+    if (durationSeconds === null) {
+        return res.status(400).json({ message: 'durationSeconds must be a non-negative number' });
     }
 
     try {
@@ -158,6 +170,7 @@ router.post('/songs', auth, async (req, res) => {
             fileName,
             audioUrl,
             attribution,
+            durationSeconds,
             moods: moodIds,
             atmosphere: atmosphereIds
         });
