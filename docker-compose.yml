@@ -52,6 +52,9 @@ services:
       - ./certs:/etc/livekit
     restart: always
     env_file: .env.${NODE_ENV}
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - "7880:7880"
       - "7881:7881"

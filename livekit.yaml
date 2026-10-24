@@ -11,7 +11,6 @@ rtc:
   stun_servers:
     - stun.l.google.com:19302
     - stun1.l.google.com:19302
-    - stun.metered.ca:80
 
 keys:
   devkey: "superlongsecuresecretkeyatleast32chars!!"
