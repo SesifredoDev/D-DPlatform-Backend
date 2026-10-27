@@ -12,6 +12,7 @@ const serverRoutes = require('./routes/server.routes');
 const messageRoutes = require('./routes/message.routes');
 const spotifyRoutes = require('./routes/spotify.routes');
 const musicRoutes = require('./routes/music.routes');
+const desktopUpdateRoutes = require('./routes/desktop-update.routes');
 const { createLiveKitConnectionInfo } = require('./services/livekit.service');
 
 const app = express();
@@ -109,6 +110,7 @@ app.use('/message', messageRoutes);
 app.use('/character', characterRoutes);
 app.use('/spotify', spotifyRoutes);
 app.use('/music', musicRoutes);
+app.use('/desktop-updates', desktopUpdateRoutes);
 
 async function handleLiveKitTokenRequest(req, res) {
     try {
