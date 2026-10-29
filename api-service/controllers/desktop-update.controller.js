@@ -10,6 +10,7 @@ async function getLatestDesktopUpdate(req, res) {
 
     try {
         const payload = await getDesktopUpdatePayload({ target, arch, currentVersion });
+        console.log(payload);
         if (!payload) {
             return res.status(204).send();
         }
